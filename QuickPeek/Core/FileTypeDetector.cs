@@ -1,0 +1,100 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+namespace QuickPeek.Core;
+
+public enum FileCategory
+{
+    Unknown,
+    Image,
+    Video,
+    Text,
+    Audio
+}
+
+public class FileTypeDetector
+{
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp",
+        ".svg", ".ico", ".heic", ".heif", ".raw", ".psd", ".ai",
+        ".tga", ".exr", ".hdr", ".pbm", ".pgm", ".ppm"
+    };
+
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v",
+        ".mpg", ".mpeg", ".3gp", ".ts", ".mts", ".m2ts", ".vob", ".ogv"
+    };
+
+    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".log", ".cfg", ".ini", ".csv", ".json", ".xml", ".yaml", ".yml",
+        ".cs", ".csproj", ".vb", ".vbproj", ".py", ".js", ".ts", ".html", ".htm",
+        ".css", ".scss", ".less", ".sql", ".md", ".markdown", ".rtf",
+        ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".java", ".kt", ".go", ".rs",
+        ".php", ".rb", ".sh", ".bat", ".cmd", ".ps1", ".psm1", ".psd1",
+        ".xaml", ".aspx", ".cshtml", ".jsp", ".jspx", ".vue", ".jsx", ".tsx",
+        ".gradle", ".properties", ".env", ".conf", ".toml"
+    };
+
+    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"
+    };
+
+    public static FileCategory Detect(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return FileCategory.Unknown;
+        if (!File.Exists(filePath)) return FileCategory.Unknown;
+
+        var ext = Path.GetExtension(filePath);
+        if (string.IsNullOrEmpty(ext)) return FileCategory.Unknown;
+
+        if (ImageExtensions.Contains(ext)) return FileCategory.Image;
+        if (VideoExtensions.Contains(ext)) return FileCategory.Video;
+        if (AudioExtensions.Contains(ext)) return FileCategory.Audio;
+        if (TextExtensions.Contains(ext)) return FileCategory.Text;
+
+        return FileCategory.Unknown;
+    }
+
+    public static bool IsSupported(string filePath)
+    {
+        var category = Detect(filePath);
+        return category != FileCategory.Unknown;
+    }
+
+    public static bool IsTextFile(string filePath) => Detect(filePath) == FileCategory.Text;
+
+    public static int GetMaxTextSize() => 2 * 1024 * 1024;
+
+    public static bool ShouldReadAsText(string filePath)
+    {
+        var category = Detect(filePath);
+        if (category == FileCategory.Text) return true;
+
+        try
+        {
+            var fi = new FileInfo(filePath);
+            if (fi.Length > GetMaxTextSize()) return false;
+
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var buffer = new byte[512];
+            var read = stream.Read(buffer, 0, buffer.Length);
+
+            for (int i = 0; i < read; i++)
+            {
+                if (buffer[i] == 0) return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+}

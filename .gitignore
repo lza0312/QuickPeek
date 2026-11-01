@@ -1,0 +1,12 @@
+# 构建输出
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# FFmpeg 原生库体积较大，未纳入仓库（放置说明见 README）
+QuickPeek/ffmpeg/**/*.dll
+
+# 本地日志与临时文件
+*.log

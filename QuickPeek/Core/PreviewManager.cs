@@ -1,0 +1,754 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows.Input;
+using QuickPeek.Models;
+using QuickPeek.Native;
+using QuickPeek.Preview;
+using QuickPeek.Services;
+
+namespace QuickPeek.Core;
+
+public class PreviewManager : IDisposable
+{
+    private readonly GlobalMouseHook _mouseHook;
+    private readonly System.Windows.Threading.DispatcherTimer _durationTimer;
+    private AppConfig _config;
+    private string? _lastPreviewedFile;
+    private bool _isDisposed;
+    private VideoPreviewer? _activeVideoPreviewer;
+
+    private IntPtr _keyboardHookHandle;
+    private LowLevelKeyboardProc? _keyboardHookDelegate;
+
+    public event EventHandler<bool>? EnabledChanged;
+    public bool IsEnabled => _config.Enabled;
+
+    public PreviewManager()
+    {
+        _config = SettingsService.Load();
+
+        _mouseHook = new GlobalMouseHook
+        {
+            HoverThresholdMs = _config.HoverDelayMs
+        };
+
+        _mouseHook.HoverDetected += OnHoverDetected;
+        _mouseHook.MouseButtonClicked += OnMouseClicked;
+        _mouseHook.MouseWheelScrolled += OnMouseWheelScrolled;
+        _mouseHook.MouseWheelScrolledH += OnMouseWheelScrolledH;
+        _mouseHook.MouseDoubleClicked += OnMouseDoubleClicked;
+
+        _durationTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(500)
+        };
+        _durationTimer.Tick += OnDurationTimerTick;
+    }
+
+    public void Start()
+    {
+        if (!_config.Enabled) return;
+
+        _mouseHook.HoverThresholdMs = _config.HoverDelayMs;
+        _mouseHook.Start();
+        StartKeyboardHook();
+        Logger.Info("QuickPeek 已启动");
+    }
+
+    public void Stop()
+    {
+        _mouseHook.Stop();
+        StopKeyboardHook();
+        HidePreview();
+    }
+
+    public void UpdateConfig(AppConfig config)
+    {
+        _config = config;
+        SettingsService.Save(_config);
+        _mouseHook.HoverThresholdMs = _config.HoverDelayMs;
+
+        if (_config.Enabled)
+        {
+            _mouseHook.Start();
+            StartKeyboardHook();
+        }
+        else
+        {
+            _mouseHook.Stop();
+            StopKeyboardHook();
+        }
+        EnabledChanged?.Invoke(this, _config.Enabled);
+    }
+
+    private int _isHoverProcessing;
+
+    /// <summary>
+    /// 悬停判定会调用 UI Automation / Shell COM，单次可达数百毫秒。
+    /// 这里放到后台线程执行，避免卡住资源管理器和设置窗口。
+    /// </summary>
+    private void OnHoverDetected(object? sender, PInvoke.POINT pt)
+    {
+        if (!_config.Enabled) return;
+        if (System.Threading.Interlocked.Exchange(ref _isHoverProcessing, 1) == 1) return;
+
+        var point = pt;
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                if (!ShellHelper.GetExplorerItemAtPoint(point, out var filePath) || string.IsNullOrEmpty(filePath))
+                {
+                    Logger.Debug($"悬停点 ({point.X},{point.Y}) 未命中文件，隐藏预览");
+                    PostToUi(HidePreview);
+                    return;
+                }
+
+                var category = FileTypeDetector.Detect(filePath);
+                Logger.Info($"悬停命中 {filePath} ({category})");
+
+                switch (category)
+                {
+                    case FileCategory.Image:
+                        if (!_config.ShowImages) { PostToUi(HidePreview); return; }
+                        break;
+                    case FileCategory.Video:
+                        if (!_config.ShowVideos) { PostToUi(HidePreview); return; }
+                        break;
+                    case FileCategory.Text:
+                        if (!_config.ShowTexts) { PostToUi(HidePreview); return; }
+                        break;
+                    case FileCategory.Audio:
+                        if (!_config.ShowAudios) { PostToUi(HidePreview); return; }
+                        break;
+                    default:
+                        PostToUi(HidePreview);
+                        return;
+                }
+
+                if (filePath == _lastPreviewedFile) return;
+
+                PostToUi(() => ShowPreview(filePath, category));
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("处理悬停失败", ex);
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _isHoverProcessing, 0);
+            }
+        });
+    }
+
+    private static void PostToUi(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        if (dispatcher.CheckAccess()) action();
+        else dispatcher.BeginInvoke(action);
+    }
+
+    private void OnMouseClicked(object? sender, EventArgs e)
+    {
+        HidePreview();
+    }
+
+    private void OnMouseWheelScrolled(object? sender, WheelEventArgs e)
+    {
+        if (_activeVideoPreviewer != null && IsCtrlKeyPressed() && _config.EnableVideoCtrlWheel)
+        {
+            var message = e.Delta > 0 ? _activeVideoPreviewer.VolumeUp() : _activeVideoPreviewer.VolumeDown();
+            ShowStatus(message);
+            e.Handled = true;
+            return;
+        }
+        HidePreview();
+    }
+
+    private void OnMouseWheelScrolledH(object? sender, WheelEventArgs e)
+    {
+        if (_activeVideoPreviewer != null && IsCtrlKeyPressed() && _config.EnableVideoCtrlWheelH)
+        {
+            var message = e.Delta > 0 ? _activeVideoPreviewer.StepForward() : _activeVideoPreviewer.StepBackward();
+            ShowStatus(message);
+            e.Handled = true;
+        }
+    }
+
+    private void OnMouseDoubleClicked(object? sender, PInvoke.POINT pt)
+    {
+        // 钩子回调内不能做耗时操作（UIA / Shell COM 可能超过 LowLevelHooksTimeout，
+        // 导致系统静默摘掉钩子），这里立刻交回 UI 线程处理
+        PostToUi(() => HandleBlankDoubleClick(pt));
+    }
+
+    private void HandleBlankDoubleClick(PInvoke.POINT pt)
+    {
+        try
+        {
+            if (!_config.EnableBlankDoubleClickBack) return;
+
+            if (!ShellHelper.IsExplorerWindowAtPoint(pt))
+            {
+                Logger.Info($"双击 ({pt.X},{pt.Y}) 不在资源管理器内，忽略");
+                return;
+            }
+
+            if (!ShellHelper.HitTestExplorerBlankArea(pt))
+            {
+                Logger.Info($"双击 ({pt.X},{pt.Y}) 命中文件图标，不是空白区域");
+                return;
+            }
+
+            Logger.Info($"双击空白区域 ({pt.X},{pt.Y}) -> 上层文件夹");
+            HidePreview();
+
+            var explorerHwnd = ShellHelper.FindExplorerWindowAtPoint(pt);
+            Logger.Info($"目标资源管理器窗口 hwnd=0x{explorerHwnd.ToInt64():X}");
+            SendUpOneLevel(explorerHwnd);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("双击返回失败", ex);
+        }
+    }
+
+    private void ShowPreview(string filePath, FileCategory category)
+    {
+        var previewWindow = Preview.PreviewWindow.Instance;
+        if (previewWindow == null)
+        {
+            previewWindow = new Preview.PreviewWindow();
+            Preview.PreviewWindow.SetInstance(previewWindow);
+        }
+
+        previewWindow.ApplyConfig(_config);
+
+        var fileName = Path.GetFileName(filePath);
+
+        // 切换预览前必须真正销毁上一个播放器。之前只是把字段置空，
+        // 旧 Player 仍然活着并继续输出音频。
+        if (_activeVideoPreviewer != null)
+        {
+            _activeVideoPreviewer.Dispose();
+            _activeVideoPreviewer = null;
+        }
+
+        switch (category)
+        {
+            case FileCategory.Image:
+                Preview.VideoWindow.Instance?.HidePreview();
+                var img = new ImagePreviewer();
+                // 解码上限取配置宽度的两倍，覆盖高 DPI 显示，同时避免超大图片整幅解码
+                var decodeWidth = (int)((_config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280) * 2);
+                if (img.Load(filePath, _config.ImageSizeMode, decodeWidth))
+                {
+                    previewWindow.SetContent(img);
+                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath, img.PixelWidth, img.PixelHeight),
+                        img.PixelWidth, img.PixelHeight);
+                    _lastPreviewedFile = filePath;
+                }
+                else
+                {
+                    img.Dispose();
+                }
+                break;
+
+            case FileCategory.Video:
+            case FileCategory.Audio:
+                // 视频/音频都由独立的 Flyleaf 窗口渲染（PreviewWindow 是透明分层窗口，
+                // 无法承载 Flyleaf 的原生渲染表面）
+                previewWindow.ClearContent();
+                previewWindow.Hide();
+
+                var video = new VideoPreviewer();
+                if (video.Load(filePath, _config.AutoPlayVideo, true, _config.ImageSizeMode, _config))
+                {
+                    _activeVideoPreviewer = video;
+
+                    var videoWindow = GetVideoWindow();
+                    videoWindow.ApplyConfig(_config);
+                    videoWindow.ShowVideo(video, fileName, BuildFileInfo(filePath, video.VideoWidth, video.VideoHeight),
+                        video.VideoWidth, video.VideoHeight, category == FileCategory.Audio);
+
+                    _lastPreviewedFile = filePath;
+                    StartDurationTimer();
+                    Logger.Info($"{(category == FileCategory.Audio ? "音频" : "视频")}预览已加载 {fileName}");
+
+                    video.PlaybackFailed += (_, reason) =>
+                        PostToUi(() => ShowVideoFallback(filePath, fileName, reason));
+
+                    video.VideoSizeChanged += (_, size) =>
+                        PostToUi(() =>
+                        {
+                            var vw = GetVideoWindow();
+                            vw.ResizeToVideo(size.Width, size.Height);
+                            vw.UpdateFileInfo(BuildFileInfo(filePath, size.Width, size.Height));
+                        });
+                }
+                else
+                {
+                    video.Dispose();
+                    ShowVideoFallback(filePath, fileName, "Load 返回失败");
+                }
+                break;
+
+            case FileCategory.Text:
+                Preview.VideoWindow.Instance?.HidePreview();
+                var text = new TextPreviewer();
+                if (text.Load(filePath, (long)(_config.MaxTextFileSizeKB * 1024)))
+                {
+                    previewWindow.SetContent(text);
+                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+                    _lastPreviewedFile = filePath;
+                }
+                else
+                {
+                    text.Dispose();
+                }
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 标题栏信息：修改日期 | 分辨率（图片/视频） | 文件大小，不含扩展名。
+    /// </summary>
+    private string BuildFileInfo(string filePath, int pixelWidth = 0, int pixelHeight = 0)
+    {
+        if (!_config.ShowFileInfo) return string.Empty;
+
+        try
+        {
+            var fi = new FileInfo(filePath);
+            var parts = new System.Collections.Generic.List<string>
+            {
+                fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+            };
+
+            if (pixelWidth > 0 && pixelHeight > 0)
+                parts.Add($"{pixelWidth}×{pixelHeight}");
+
+            parts.Add(FormatFileSize(fi.Length));
+            return string.Join("  |  ", parts);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len /= 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    public void HidePreview()
+    {
+        StopDurationTimer();
+
+        // 不做早退：即使 _lastPreviewedFile 为空，也要确保视频窗口和播放器被真正停掉，
+        // 否则会出现「预览已消失但声音还在响」。
+        try
+        {
+            var previewWindow = Preview.PreviewWindow.Instance;
+            if (previewWindow != null)
+            {
+                previewWindow.ClearContent();
+                previewWindow.Hide();
+            }
+
+            if (_activeVideoPreviewer != null)
+            {
+                _activeVideoPreviewer.Dispose();
+                _activeVideoPreviewer = null;
+            }
+
+            // 先释放播放器再解绑 Host，避免宿主继续渲染已释放的实例
+            Preview.VideoWindow.Instance?.HidePreview();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("关闭预览失败", ex);
+        }
+
+        _lastPreviewedFile = null;
+    }
+
+    private VideoWindow GetVideoWindow()
+    {
+        var window = VideoWindow.Instance;
+        if (window == null)
+        {
+            window = new VideoWindow();
+            VideoWindow.SetInstance(window);
+        }
+        return window;
+    }
+
+    private void UpdateVideoDurationDisplay()
+    {
+        if (_activeVideoPreviewer == null) return;
+        var info = _activeVideoPreviewer.GetPlaybackInfo();
+        if (string.IsNullOrEmpty(info)) return;
+
+        VideoWindow.Instance?.UpdatePlaybackInfo(info);
+    }
+
+    private void StartDurationTimer()
+    {
+        UpdateVideoDurationDisplay();
+        _durationTimer.Start();
+    }
+
+    private void OnDurationTimerTick(object? sender, EventArgs e)
+    {
+        UpdateVideoDurationDisplay();
+    }
+
+    private static void ShowStatus(string message)
+    {
+        Preview.VideoWindow.Instance?.SetStatus(message);
+        Preview.PreviewWindow.Instance?.SetStatus(message);
+    }
+
+    /// <summary>
+    /// 视频无法解码时，用 Shell 缩略图兜底显示首帧。
+    /// </summary>
+    private void ShowVideoFallback(string filePath, string fileName, string reason)
+    {
+        Logger.Info($"视频解码失败，回退缩略图: {filePath} ({reason})");
+
+        StopDurationTimer();
+        Preview.VideoWindow.Instance?.HidePreview();
+
+        if (_activeVideoPreviewer != null)
+        {
+            _activeVideoPreviewer.Dispose();
+            _activeVideoPreviewer = null;
+        }
+
+        var previewWindow = Preview.PreviewWindow.Instance;
+        if (previewWindow == null) return;
+
+        var thumb = ShellHelper.GetShellThumbnail(filePath, 1024);
+
+        if (thumb != null)
+        {
+            var img = new ImagePreviewer();
+            if (img.LoadFromBitmap(thumb, _config.ImageSizeMode))
+            {
+                previewWindow.SetContent(img);
+                previewWindow.ShowPreview(fileName, BuildFileInfo(filePath, img.PixelWidth, img.PixelHeight),
+                    img.PixelWidth, img.PixelHeight);
+                previewWindow.SetStatus("系统缺少该格式的解码器，已显示首帧缩略图");
+                _lastPreviewedFile = filePath;
+                return;
+            }
+            img.Dispose();
+        }
+
+        previewWindow.ClearContent();
+        previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+        previewWindow.SetStatus("系统缺少该格式的解码器，无法预览");
+        _lastPreviewedFile = filePath;
+    }
+
+    private void StopDurationTimer()
+    {
+        _durationTimer.Stop();
+    }
+
+    // ---------- 键盘钩子 ----------
+
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private const int WH_KEYBOARD_LL = 13;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_SYSKEYDOWN = 0x0104;
+
+    private const int VK_CONTROL = 0x11;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_MENU = 0x12;
+
+    public static bool IsCtrlKeyPressed() => (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    public static bool IsShiftKeyPressed() => (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    public static bool IsAltKeyPressed() => (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+
+    private void StartKeyboardHook()
+    {
+        if (_keyboardHookHandle != IntPtr.Zero) return;
+
+        _keyboardHookDelegate = KeyboardHookProc;
+        var hModule = PInvoke.GetModuleHandle(null);
+        _keyboardHookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardHookDelegate, hModule, 0);
+
+        if (_keyboardHookHandle == IntPtr.Zero)
+        {
+            Logger.Error($"安装键盘钩子失败, err={Marshal.GetLastWin32Error()}");
+            _keyboardHookDelegate = null;
+        }
+    }
+
+    private void StopKeyboardHook()
+    {
+        if (_keyboardHookHandle == IntPtr.Zero) return;
+
+        UnhookWindowsHookEx(_keyboardHookHandle);
+        _keyboardHookHandle = IntPtr.Zero;
+        _keyboardHookDelegate = null;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    private IntPtr KeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode < 0 || _activeVideoPreviewer == null)
+            return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+
+        try
+        {
+            var msg = wParam.ToInt32();
+            if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
+                return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+
+            var kbd = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+            var combo = HotkeyText.FromVirtualKey((int)kbd.vkCode);
+
+            if (combo != null && TryHandleVideoHotkey(combo))
+                return (IntPtr)1;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("键盘钩子回调异常", ex);
+        }
+
+        return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+    }
+
+    private bool TryHandleVideoHotkey(KeyCombo combo)
+    {
+        if (_activeVideoPreviewer == null) return false;
+
+        string? message = null;
+
+        if (Matches(combo, _config.VideoHotkeyVolumeUp)) message = _activeVideoPreviewer.VolumeUp();
+        else if (Matches(combo, _config.VideoHotkeyVolumeDown)) message = _activeVideoPreviewer.VolumeDown();
+        else if (Matches(combo, _config.VideoHotkeyStepFwd)) message = _activeVideoPreviewer.StepForward();
+        else if (Matches(combo, _config.VideoHotkeyStepBack)) message = _activeVideoPreviewer.StepBackward();
+        else if (Matches(combo, _config.VideoHotkeySpeedUp)) message = _activeVideoPreviewer.SpeedUp();
+        else if (Matches(combo, _config.VideoHotkeySpeedDown)) message = _activeVideoPreviewer.SpeedDown();
+
+        if (message == null) return false;
+
+        ShowStatus(message);
+        UpdateVideoDurationDisplay();
+        Logger.Debug($"视频快捷键 {combo} -> {message}");
+        return true;
+    }
+
+    private static bool Matches(KeyCombo actual, string? configured)
+    {
+        var expected = HotkeyText.Parse(configured);
+        return expected != null && expected.Equals(actual);
+    }
+
+    // ---------- 发送 BackSpace ----------
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion U;
+        public static int Size => Marshal.SizeOf(typeof(INPUT));
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUITHREADINFO
+    {
+        public int cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    private const uint INPUT_KEYBOARD = 1;
+    private const ushort VK_UP_KEY = 0x28;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+
+    /// <summary>
+    /// 双击空白后跳到「上层文件夹」。
+    /// 优先通过 UIA 点击资源管理器自带的「向上一级」按钮（Explorer 自己处理层级链，
+    /// 文件夹 → 盘符根 → 此电脑 → 桌面），失败再用 Shell COM 计算父目录。
+    /// </summary>
+    private static void SendUpOneLevel(IntPtr explorerHwnd)
+    {
+        try
+        {
+            if (ShellHelper.NavigateUpViaUia(explorerHwnd))
+            {
+                return;
+            }
+
+            Logger.Info("UIA 向上失败，改用 Shell COM 导航父目录");
+
+            if (ShellHelper.NavigateToParentFolder(explorerHwnd))
+            {
+                Logger.Info("已通过 Shell COM 导航到父目录");
+                return;
+            }
+
+            Logger.Info("Shell COM 导航失败，改用 Alt+Up 注入");
+
+            if (explorerHwnd != IntPtr.Zero)
+            {
+                SetForegroundWindow(explorerHwnd);
+                System.Threading.Thread.Sleep(40);
+            }
+
+            // INPUT 的 cbSize 必须是 Win32 的 sizeof(INPUT)（x64 为 40）
+            var inputs = new INPUT[4];
+
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].U.ki = new KEYBDINPUT { wVk = (ushort)VK_MENU };
+
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].U.ki = new KEYBDINPUT { wVk = VK_UP_KEY, dwFlags = KEYEVENTF_EXTENDEDKEY };
+
+            inputs[2].type = INPUT_KEYBOARD;
+            inputs[2].U.ki = new KEYBDINPUT { wVk = VK_UP_KEY, dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP };
+
+            inputs[3].type = INPUT_KEYBOARD;
+            inputs[3].U.ki = new KEYBDINPUT { wVk = (ushort)VK_MENU, dwFlags = KEYEVENTF_KEYUP };
+
+            var sent = SendInput(4, inputs, INPUT.Size);
+            if (sent == 4)
+            {
+                Logger.Info($"Alt+Up 已注入 (cbSize={INPUT.Size})");
+                return;
+            }
+
+            Logger.Error($"SendInput 失败 sent={sent} cbSize={INPUT.Size} err={Marshal.GetLastWin32Error()}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("跳到上层文件夹失败", ex);
+        }
+    }
+
+    public AppConfig GetConfig() => _config;
+
+    public void Dispose()
+    {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
+        Stop();
+        _mouseHook.Dispose();
+
+        GC.SuppressFinalize(this);
+    }
+}

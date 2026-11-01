@@ -1,0 +1,72 @@
+<Window x:Class="QuickPeek.Preview.PreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="QuickPeek"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        WindowStartupLocation="Manual"
+        ResizeMode="NoResize"
+        SourceInitialized="Window_SourceInitialized">
+    <Border x:Name="RootBorder"
+            Background="#E61E1E1E"
+            BorderThickness="0">
+        <Grid x:Name="RootGrid">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- 所有文件信息集中在顶部标题栏；不显示信息时整条隐藏，成为无边框浮窗 -->
+            <Border x:Name="HeaderBorder"
+                    Grid.Row="0"
+                    Height="44"
+                    Background="#F22D2D2D"
+                    Padding="12,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock x:Name="FileNameTextBlock"
+                                   Foreground="White"
+                                   FontSize="13"
+                                   FontWeight="Medium"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="HeaderInfoTextBlock"
+                                   Foreground="#888888"
+                                   FontSize="11"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0"
+                                   Visibility="Collapsed" />
+                        <TextBlock x:Name="StatusTextBlock"
+                                   Foreground="#4FC3F7"
+                                   FontSize="11"
+                                   FontWeight="Medium"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                    <Button x:Name="CloseButton"
+                            Grid.Column="1"
+                            Width="24"
+                            Height="24"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="CloseButton_Click"
+                            ToolTip="关闭预览">
+                        <TextBlock x:Name="CloseGlyphTextBlock" Text="✕" Foreground="#AAAAAA" FontSize="12" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <ContentControl x:Name="PreviewContent"
+                            Grid.Row="1"
+                            Margin="0"
+                            Focusable="False" />
+        </Grid>
+    </Border>
+</Window>
