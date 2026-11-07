@@ -37,12 +37,11 @@ dotnet run --project QuickPeek
 
 ## FFmpeg 依赖
 
-视频/音频预览由 [FlyleafLib](https://github.com/amfdev/FlyleafLib) 驱动，需要 FFmpeg 7.x 的共享库。由于体积较大，仓库不包含这些 DLL，请将它们放到：
+视频/音频预览由 [FlyleafLib](https://github.com/SuRGeoNix/Flyleaf) 驱动，需要 FFmpeg 9.x 的共享库。由于体积较大，仓库不包含这些 DLL，请将它们放到：
 
 ```
 QuickPeek/ffmpeg/bin/
 ├── avcodec-63.dll
-├── avdevice-63.dll
 ├── avfilter-12.dll
 ├── avformat-63.dll
 ├── avutil-61.dll
@@ -50,7 +49,24 @@ QuickPeek/ffmpeg/bin/
 └── swscale-10.dll
 ```
 
-构建时 `QuickPeek.csproj` 会把这些文件复制到输出目录的 `ffmpeg` 子目录。缺少 DLL 时图片与文本预览仍可用，视频/音频预览会回退为 Shell 缩略图。
+构建时 `QuickPeek.csproj` 会把这些文件复制到输出/发布目录的 `ffmpeg` 子目录。缺少 DLL 时图片与文本预览仍可用，视频/音频预览会回退为 Shell 缩略图并给出提示。
+
+> 不需要 `avdevice-63.dll`：引擎加载配置使用 `Filters`，已实测移除后视频打开、倍速、快进均正常。
+
+## 打包发布
+
+```powershell
+.\publish.ps1
+```
+
+会在 `publish/` 下生成两个包：
+
+- `publish/full`（`QuickPeek-full.zip`）：含 FFmpeg，支持视频/音频预览
+- `publish/lite`（`QuickPeek-lite.zip`）：不含 FFmpeg，仅图片/文本预览
+
+## 许可证
+
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。第三方组件（FlyleafLib、FFmpeg 等）的许可证与来源见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 配置与日志
 
@@ -62,6 +78,7 @@ QuickPeek/ffmpeg/bin/
 | 目录 | 说明 |
 | --- | --- |
 | `QuickPeek` | WPF 主程序：悬停钩子、预览窗口、播放器、设置界面 |
+| `QuickPeek.Tests` | 配置解析与迁移的单元测试（`dotnet test`） |
 
 ## 使用说明
 

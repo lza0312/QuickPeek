@@ -17,7 +17,18 @@ public static class AutoStart
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            return key?.GetValue(ValueName) != null;
+            var value = key?.GetValue(ValueName) as string;
+            if (string.IsNullOrEmpty(value)) return false;
+
+            var exePath = TrimQuotes(value);
+            if (!File.Exists(exePath))
+            {
+                // 程序被移动或删除后，注册表里会残留失效路径，视为未启用
+                Logger.Debug($"自启动路径已失效: {exePath}");
+                return false;
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -30,6 +41,16 @@ public static class AutoStart
     {
         try
         {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true)
+                            ?? Registry.CurrentUser.CreateSubKey(RunKeyPath);
+
+            if (!enabled)
+            {
+                key.DeleteValue(ValueName, throwOnMissingValue: false);
+                Logger.Info("已取消开机自启动");
+                return true;
+            }
+
             var exePath = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exePath) || !exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             {
@@ -44,20 +65,22 @@ public static class AutoStart
                 return false;
             }
 
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true)
-                            ?? Registry.CurrentUser.CreateSubKey(RunKeyPath);
-
-            if (enabled)
+            // 只写入真实存在、且位于发布目录的可执行文件，避免把临时/构建路径写进注册表
+            if (!File.Exists(exePath))
             {
-                key.SetValue(ValueName, $"\"{exePath}\"");
-                Logger.Info($"已设置开机自启动: {exePath}");
-            }
-            else
-            {
-                key.DeleteValue(ValueName, throwOnMissingValue: false);
-                Logger.Info("已取消开机自启动");
+                Logger.Error($"自启动失败：程序文件不存在 ({exePath})");
+                return false;
             }
 
+            var directory = Path.GetDirectoryName(exePath);
+            if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, "QuickPeek.dll")))
+            {
+                Logger.Error($"自启动失败：{exePath} 不是完整的发布目录，请先执行发布");
+                return false;
+            }
+
+            key.SetValue(ValueName, $"\"{exePath}\"");
+            Logger.Info($"已设置开机自启动: {exePath}");
             return true;
         }
         catch (Exception ex)
@@ -65,5 +88,13 @@ public static class AutoStart
             Logger.Error("设置开机自启动失败", ex);
             return false;
         }
+    }
+
+    private static string TrimQuotes(string value)
+    {
+        value = value.Trim();
+        if (value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"'))
+            value = value.Substring(1, value.Length - 2);
+        return value;
     }
 }

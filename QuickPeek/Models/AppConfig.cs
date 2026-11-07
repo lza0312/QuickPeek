@@ -18,6 +18,11 @@ public enum PreviewSizeMode
 
 public class AppConfig
 {
+    /// <summary>当前配置结构版本，用于读取旧配置时执行迁移。</summary>
+    public const int CurrentConfigVersion = 1;
+
+    public int ConfigVersion { get; set; } = CurrentConfigVersion;
+
     public bool Enabled { get; set; } = true;
     public int HoverDelayMs { get; set; } = 500;
     public CornerPosition PreviewCorner { get; set; } = CornerPosition.BottomRight;

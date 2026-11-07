@@ -8,6 +8,11 @@
     <Nullable>enable</Nullable>
     <ApplicationIcon />
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 精简版：-p:LiteBuild=true，不打包 FFmpeg，仅图片/文本预览 -->
+    <LiteBuild Condition="'$(LiteBuild)' == ''">false</LiteBuild>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(LiteBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);LITE_BUILD</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FlyleafLib" Version="3.11.13" />
@@ -15,10 +20,11 @@
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
   </ItemGroup>
-  <ItemGroup>
-    <!-- FlyleafLib 依赖的 FFmpeg 原生库，需随程序一起输出 -->
+  <ItemGroup Condition="'$(LiteBuild)' != 'true'">
+    <!-- FlyleafLib 依赖的 FFmpeg 原生库，需随程序一起输出与发布 -->
     <None Include="ffmpeg\bin\*.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <Link>ffmpeg\%(Filename)%(Extension)</Link>
     </None>
   </ItemGroup>

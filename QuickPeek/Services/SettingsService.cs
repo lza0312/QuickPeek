@@ -16,14 +16,26 @@ public class SettingsService
 
     public static AppConfig Load() => LoadFrom(ConfigPath);
 
-    /// <summary>从指定路径读取；主文件损坏或缺失时回退 .bak，并对结果做范围钳制。</summary>
+    /// <summary>从指定路径读取；主文件损坏或缺失时回退 .bak，并对结果做迁移与范围钳制。</summary>
     public static AppConfig LoadFrom(string configPath)
     {
         var config = TryLoad(configPath) ?? TryLoad(configPath + ".bak");
         if (config == null) return AppConfig.Default;
 
+        Migrate(config);
         config.Normalize();
         return config;
+    }
+
+    /// <summary>按 ConfigVersion 执行旧配置迁移。</summary>
+    private static void Migrate(AppConfig config)
+    {
+        if (config.ConfigVersion < 1)
+        {
+            // v0 早期配置只有单一边距 PreviewMarginPx，
+            // 具体的字段映射在 TryLoad 中完成，这里统一升级版本号
+            config.ConfigVersion = AppConfig.CurrentConfigVersion;
+        }
     }
 
     private static AppConfig? TryLoad(string path)
@@ -36,6 +48,10 @@ public class SettingsService
             var root = JObject.Parse(json);
             var config = root.ToObject<AppConfig>();
             if (config == null) return null;
+
+            // 旧版本没有 ConfigVersion 字段，反序列化后会保留默认值，
+            // 这里显式标记为 0，交给 Migrate 统一升级
+            if (root["ConfigVersion"] == null) config.ConfigVersion = 0;
 
             // 旧版本只有单一边距，升级后同步到宽/高两个字段
             var legacy = root["PreviewMarginPx"];

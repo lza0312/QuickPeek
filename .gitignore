@@ -10,3 +10,7 @@ QuickPeek/ffmpeg/**/*.dll
 
 # 本地日志与临时文件
 *.log
+
+# 发布产物
+publish/
+*.zip

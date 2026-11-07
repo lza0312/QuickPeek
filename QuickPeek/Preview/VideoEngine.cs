@@ -14,7 +14,13 @@ public static class VideoEngine
     private static bool _started;
     private static bool _failed;
 
-    public static bool IsReady => _started && !_failed;
+    /// <summary>精简版：不随包分发 FFmpeg，仅支持图片与文本预览。</summary>
+    public const bool IsLiteBuild =
+#if LITE_BUILD
+        true;
+#else
+        false;
+#endif
 
     public static bool EnsureStarted()
     {
@@ -36,7 +42,9 @@ public static class VideoEngine
                 var config = new EngineConfig
                 {
                     FFmpegPath = ffmpegPath,
-                    FFmpegLoadProfile = Flyleaf.FFmpeg.LoadProfile.All,
+                    // Filters 已包含解码、缩放与倍速所需的 avfilter；
+                    // 与 All 不同，它不加载 avdevice，可少分发约 5 MB 的 avdevice-63.dll
+                    FFmpegLoadProfile = Flyleaf.FFmpeg.LoadProfile.Filters,
                     FFmpegLogLevel = Flyleaf.FFmpeg.LogLevel.Quiet,
                     DisableAudio = false,
                     LogLevel = LogLevel.Quiet

@@ -63,6 +63,19 @@ public class ConfigTests : IDisposable
 
         Assert.Equal(40, config.PreviewMarginXPx);
         Assert.Equal(40, config.PreviewMarginYPx);
+        Assert.Equal(AppConfig.CurrentConfigVersion, config.ConfigVersion);
+    }
+
+    [Fact]
+    public void LoadFrom_MigratesExplicitZeroVersion()
+    {
+        var path = Path.Combine(_tempDir, "settings.json");
+        File.WriteAllText(path, "{ \"ConfigVersion\": 0, \"HoverDelayMs\": 500 }");
+
+        var config = SettingsService.LoadFrom(path);
+
+        Assert.Equal(500, config.HoverDelayMs);
+        Assert.Equal(AppConfig.CurrentConfigVersion, config.ConfigVersion);
     }
 
     [Fact]

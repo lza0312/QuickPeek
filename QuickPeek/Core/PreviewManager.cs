@@ -363,7 +363,10 @@ public class PreviewManager : IDisposable
                 }
                 else
                 {
-                    ShowVideoFallback(filePath, fileName, "Load 返回失败");
+                    var reason = Preview.VideoEngine.IsLiteBuild
+                        ? "精简版不支持视频/音频预览，已显示系统缩略图"
+                        : "视频/音频引擎不可用（请检查 ffmpeg 目录）";
+                    ShowVideoFallback(filePath, fileName, reason);
                 }
                 break;
 
