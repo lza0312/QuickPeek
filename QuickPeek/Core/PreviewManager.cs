@@ -2,6 +2,8 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using QuickPeek.Models;
 using QuickPeek.Native;
@@ -18,6 +20,9 @@ public class PreviewManager : IDisposable
     private string? _lastPreviewedFile;
     private bool _isDisposed;
     private VideoPreviewer? _activeVideoPreviewer;
+
+    private int _previewVersion;
+    private CancellationTokenSource? _pendingPreviewCts;
 
     private IntPtr _keyboardHookHandle;
     private LowLevelKeyboardProc? _keyboardHookDelegate;
@@ -262,6 +267,11 @@ public class PreviewManager : IDisposable
 
     private void ShowPreview(string filePath, FileCategory category)
     {
+        CancelPendingPreview();
+        var version = ++_previewVersion;
+        var cts = new CancellationTokenSource();
+        _pendingPreviewCts = cts;
+
         var previewWindow = Preview.PreviewWindow.Instance;
         if (previewWindow == null)
         {
@@ -281,25 +291,14 @@ public class PreviewManager : IDisposable
             _activeVideoPreviewer = null;
         }
 
+        // 先标记，避免解码期间同一个文件被重复触发、反复取消
+        _lastPreviewedFile = filePath;
+
         switch (category)
         {
             case FileCategory.Image:
                 Preview.VideoWindow.Instance?.HidePreview();
-                var img = new ImagePreviewer();
-                // 解码上限取配置宽度的两倍，覆盖高 DPI 显示，同时避免超大图片整幅解码
-                var decodeWidth = (int)((_config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280) * 2);
-                if (img.Load(filePath, _config.ImageSizeMode, decodeWidth))
-                {
-                    previewWindow.SetContent(img);
-                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath, img.PixelWidth, img.PixelHeight),
-                        img.PixelWidth, img.PixelHeight);
-                    _lastPreviewedFile = filePath;
-                }
-                else
-                {
-                    img.Dispose();
-                    ShowImageFallback(filePath, fileName, "解码失败");
-                }
+                _ = LoadImagePreviewAsync(filePath, fileName, version, cts.Token);
                 break;
 
             case FileCategory.Video:
@@ -319,7 +318,6 @@ public class PreviewManager : IDisposable
                     videoWindow.ShowVideo(video, fileName, BuildFileInfo(filePath, video.VideoWidth, video.VideoHeight),
                         video.VideoWidth, video.VideoHeight, category == FileCategory.Audio);
 
-                    _lastPreviewedFile = filePath;
                     StartDurationTimer();
                     Logger.Debug($"{(category == FileCategory.Audio ? "音频" : "视频")}预览已加载 {fileName}");
 
@@ -343,22 +341,128 @@ public class PreviewManager : IDisposable
 
             case FileCategory.Text:
                 Preview.VideoWindow.Instance?.HidePreview();
-                var text = new TextPreviewer();
-                if (text.Load(filePath, (long)(_config.MaxTextFileSizeKB * 1024)))
-                {
-                    previewWindow.SetContent(text);
-                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
-                    _lastPreviewedFile = filePath;
-                }
-                else
-                {
-                    text.Dispose();
-                    previewWindow.ClearContent();
-                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
-                    previewWindow.SetStatus("无法读取该文本文件（可能编码不支持或文件被占用）");
-                    _lastPreviewedFile = filePath;
-                }
+                _ = LoadTextPreviewAsync(filePath, fileName, version, cts.Token);
                 break;
+        }
+    }
+
+    private void CancelPendingPreview()
+    {
+        var cts = _pendingPreviewCts;
+        _pendingPreviewCts = null;
+        if (cts == null) return;
+
+        cts.Cancel();
+    }
+
+    /// <summary>解码上限取配置宽度的两倍，覆盖高 DPI 显示，同时避免超大图片整幅解码。</summary>
+    private int GetImageDecodeWidth()
+        => (int)((_config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280) * 2);
+
+    private static string BuildCacheKey(string filePath, long variant)
+    {
+        try
+        {
+            var fi = new FileInfo(filePath);
+            return $"{filePath}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}|{variant}";
+        }
+        catch
+        {
+            return $"{filePath}|{variant}";
+        }
+    }
+
+    private async Task LoadImagePreviewAsync(string filePath, string fileName, int version, CancellationToken token)
+    {
+        try
+        {
+            var decodeWidth = GetImageDecodeWidth();
+            var cacheKey = BuildCacheKey(filePath, decodeWidth);
+
+            var cached = PreviewCache.GetImage(cacheKey);
+            ImageDecodeResult result;
+            if (cached != null)
+            {
+                result = new ImageDecodeResult(cached.Bitmap, cached.PixelWidth, cached.PixelHeight);
+            }
+            else
+            {
+                result = await Task.Run(() => ImagePreviewer.Decode(filePath, decodeWidth), token);
+
+                if (result.Bitmap != null)
+                {
+                    PreviewCache.PutImage(cacheKey, new PreviewCache.ImageEntry
+                    {
+                        Bitmap = result.Bitmap,
+                        PixelWidth = result.PixelWidth > 0 ? result.PixelWidth : result.Bitmap.PixelWidth,
+                        PixelHeight = result.PixelHeight > 0 ? result.PixelHeight : result.Bitmap.PixelHeight,
+                        Bytes = (long)result.Bitmap.PixelWidth * result.Bitmap.PixelHeight * 4
+                    });
+                }
+            }
+
+            if (token.IsCancellationRequested || version != _previewVersion) return;
+
+            var previewWindow = PreviewWindow.Instance;
+            if (previewWindow == null) return;
+
+            if (result.Bitmap == null)
+            {
+                ShowImageFallback(filePath, fileName, "解码失败");
+                return;
+            }
+
+            var img = new ImagePreviewer(result.Bitmap, result.PixelWidth, result.PixelHeight, _config.ImageSizeMode);
+            previewWindow.SetContent(img);
+            previewWindow.ShowPreview(fileName, BuildFileInfo(filePath, img.PixelWidth, img.PixelHeight),
+                img.PixelWidth, img.PixelHeight);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("图片预览失败", ex);
+        }
+    }
+
+    private async Task LoadTextPreviewAsync(string filePath, string fileName, int version, CancellationToken token)
+    {
+        try
+        {
+            var maxBytes = (long)(_config.MaxTextFileSizeKB * 1024);
+            var cacheKey = BuildCacheKey(filePath, maxBytes);
+
+            var content = PreviewCache.GetText(cacheKey);
+            if (content == null)
+            {
+                content = await Task.Run(() => TextPreviewer.ReadText(filePath, maxBytes), token);
+                if (content != null) PreviewCache.PutText(cacheKey, content);
+            }
+
+            if (token.IsCancellationRequested || version != _previewVersion) return;
+
+            var previewWindow = PreviewWindow.Instance;
+            if (previewWindow == null) return;
+
+            if (content == null)
+            {
+                previewWindow.ClearContent();
+                previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+                previewWindow.SetStatus("无法读取该文本文件（可能编码不支持或文件被占用）");
+                return;
+            }
+
+            var text = new TextPreviewer(content);
+            previewWindow.SetContent(text);
+            previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("文本预览失败", ex);
         }
     }
 
@@ -436,6 +540,8 @@ public class PreviewManager : IDisposable
 
     public void HidePreview()
     {
+        CancelPendingPreview();
+        _previewVersion++;
         StopDurationTimer();
 
         // 不做早退：即使 _lastPreviewedFile 为空，也要确保视频窗口和播放器被真正停掉，

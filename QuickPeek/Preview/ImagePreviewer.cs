@@ -8,6 +8,21 @@ using QuickPeek.Models;
 
 namespace QuickPeek.Preview;
 
+/// <summary>后台线程解码结果：冻结后的位图 + 原始像素尺寸（用于信息栏）。</summary>
+public sealed class ImageDecodeResult
+{
+    public BitmapSource? Bitmap { get; }
+    public int PixelWidth { get; }
+    public int PixelHeight { get; }
+
+    public ImageDecodeResult(BitmapSource? bitmap, int pixelWidth, int pixelHeight)
+    {
+        Bitmap = bitmap;
+        PixelWidth = pixelWidth;
+        PixelHeight = pixelHeight;
+    }
+}
+
 public class ImagePreviewer : Border, IDisposable
 {
     private BitmapSource? _bitmapSource;
@@ -24,23 +39,30 @@ public class ImagePreviewer : Border, IDisposable
         Background = Brushes.Transparent;
     }
 
-    public bool Load(string filePath, PreviewSizeMode sizeMode = PreviewSizeMode.MaxOriginalRatio, int maxDecodeWidthPx = 0)
+    public ImagePreviewer(BitmapSource source, int pixelWidth, int pixelHeight, PreviewSizeMode sizeMode)
+    {
+        Background = Brushes.Transparent;
+        _pixelWidth = pixelWidth;
+        _pixelHeight = pixelHeight;
+        LoadFromBitmap(source, sizeMode);
+    }
+
+    /// <summary>
+    /// 在后台线程完成元数据读取与解码，返回已 Freeze 的位图。
+    /// Freeze 之后才能安全地从解码线程交给 UI 线程使用。
+    /// </summary>
+    public static ImageDecodeResult Decode(string filePath, int maxDecodeWidthPx)
     {
         try
         {
             // 先只读元数据拿到真实分辨率，再按上限解码，避免超大图片占满内存
             var size = ReadPixelSize(filePath);
-            _pixelWidth = size.Width;
-            _pixelHeight = size.Height;
-
-            _bitmapSource = LoadImage(filePath, maxDecodeWidthPx, size.Width);
-            if (_bitmapSource == null) return false;
-
-            return LoadFromBitmap(_bitmapSource, sizeMode);
+            var bitmap = LoadImage(filePath, maxDecodeWidthPx, size.Width);
+            return new ImageDecodeResult(bitmap, size.Width, size.Height);
         }
         catch
         {
-            return false;
+            return new ImageDecodeResult(null, 0, 0);
         }
     }
 
@@ -99,14 +121,12 @@ public class ImagePreviewer : Border, IDisposable
         {
             var extension = Path.GetExtension(filePath).ToLowerInvariant();
 
-            BitmapImage? bitmap = null;
-
             if (extension == ".svg")
             {
                 return LoadSvg(filePath);
             }
 
-            bitmap = new BitmapImage();
+            var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
@@ -117,11 +137,8 @@ public class ImagePreviewer : Border, IDisposable
             }
             bitmap.EndInit();
 
-            if (bitmap.CanFreeze)
-            {
-                bitmap.Freeze();
-            }
-
+            if (!bitmap.CanFreeze) return null;
+            bitmap.Freeze();
             return bitmap;
         }
         catch

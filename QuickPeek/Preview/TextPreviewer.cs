@@ -12,15 +12,17 @@ public class TextPreviewer : ScrollViewer, IDisposable
     private TextBox? _textBox;
     private bool _isDisposed;
 
-    public TextPreviewer()
+    public TextPreviewer(string content)
     {
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
         Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
         Padding = new Thickness(12);
+        SetText(content);
     }
 
-    public bool Load(string filePath, long maxSizeBytes = 2 * 1024 * 1024)
+    /// <summary>在后台线程读取文本内容；超过上限时只读前 maxSizeBytes 字节并加提示。</summary>
+    public static string? ReadText(string filePath, long maxSizeBytes)
     {
         try
         {
@@ -32,25 +34,19 @@ public class TextPreviewer : ScrollViewer, IDisposable
                 sb.AppendLine(new string('─', 40));
 
                 using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                var buffer = new byte[maxSizeBytes];
+                var buffer = new byte[(int)Math.Min(maxSizeBytes, int.MaxValue)];
                 var read = stream.Read(buffer, 0, buffer.Length);
 
                 var encoding = DetectEncoding(buffer);
                 sb.Append(encoding.GetString(buffer, 0, read));
-
-                SetText(sb.ToString());
-                return true;
+                return sb.ToString();
             }
 
-            var content = ReadFileContent(filePath);
-            if (content == null) return false;
-
-            SetText(content);
-            return true;
+            return ReadFileContent(filePath);
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 
@@ -66,8 +62,7 @@ public class TextPreviewer : ScrollViewer, IDisposable
             stream.Position = 0;
 
             using var reader = new StreamReader(stream, encoding);
-            var content = reader.ReadToEnd();
-            return content;
+            return reader.ReadToEnd();
         }
         catch
         {
