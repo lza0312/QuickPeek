@@ -202,13 +202,15 @@ public class PreviewManager : IDisposable
     }
 
     private static bool IsExplorerForeground()
-        => ShellHelper.IsExplorerWindow(PInvoke.GetForegroundWindow());
+        => ShellHelper.IsExplorerClassWindow(PInvoke.GetForegroundWindow());
 
     private void OnMouseClicked(object? sender, EventArgs e)
     {
         // 在自家预览窗口上点击不应把预览关掉（否则点视频区域也会闪一下消失）
         if (PInvoke.GetCursorPos(out var pt) && IsPointOverPreviewWindow(pt)) return;
-        HidePreview();
+
+        // 钩子回调里只投递消息，真正的窗口/播放器操作放回 UI 线程
+        PostToUi(HidePreview);
     }
 
     private void OnMouseWheelScrolled(object? sender, WheelEventArgs e)
@@ -218,16 +220,27 @@ public class PreviewManager : IDisposable
         var overOwnPreview = IsPointOverPreviewWindow(pt);
 
         // Ctrl+滚轮只在资源管理器前台或光标位于预览窗口内时生效
-        if (_activeVideoPreviewer != null && _config.EnableVideoCtrlWheel && IsCtrlKeyPressed()
-            && (overOwnPreview || IsExplorerForeground()))
+        var suppress = _activeVideoPreviewer != null && _config.EnableVideoCtrlWheel && IsCtrlKeyPressed()
+            && (overOwnPreview || IsExplorerForeground());
+
+        if (suppress)
         {
-            var message = e.Delta > 0 ? _activeVideoPreviewer.VolumeUp() : _activeVideoPreviewer.VolumeDown();
-            ShowStatus(message);
+            // 必须在钩子回调内同步设置 Handled，否则滚轮已经传给资源管理器
             e.Handled = true;
+            var delta = e.Delta;
+            PostToUi(() => HandleVolumeWheel(delta));
             return;
         }
 
-        if (!overOwnPreview) HidePreview();
+        if (!overOwnPreview) PostToUi(HidePreview);
+    }
+
+    private void HandleVolumeWheel(int delta)
+    {
+        var video = _activeVideoPreviewer;
+        if (video == null) return;
+
+        ShowStatus(delta > 0 ? video.VolumeUp() : video.VolumeDown());
     }
 
     private void OnMouseWheelScrolledH(object? sender, WheelEventArgs e)
@@ -237,9 +250,17 @@ public class PreviewManager : IDisposable
         if (!PInvoke.GetCursorPos(out var pt)) return;
         if (!IsPointOverPreviewWindow(pt) && !IsExplorerForeground()) return;
 
-        var message = e.Delta > 0 ? _activeVideoPreviewer.StepForward() : _activeVideoPreviewer.StepBackward();
-        ShowStatus(message);
         e.Handled = true;
+        var delta = e.Delta;
+        PostToUi(() => HandleSeekWheel(delta));
+    }
+
+    private void HandleSeekWheel(int delta)
+    {
+        var video = _activeVideoPreviewer;
+        if (video == null) return;
+
+        ShowStatus(delta > 0 ? video.StepForward() : video.StepBackward());
     }
 
     private void OnMouseDoubleClicked(object? sender, PInvoke.POINT pt)
@@ -358,11 +379,16 @@ public class PreviewManager : IDisposable
         cts.Cancel();
     }
 
-    /// <summary>解码上限取配置宽度的两倍，覆盖高 DPI 显示，同时避免超大图片整幅解码。</summary>
+    /// <summary>解码上限取配置尺寸的两倍，覆盖高 DPI 显示，同时避免超大图片整幅解码。</summary>
+    private const long MaxImagePixels = 16_000_000;
+
     private int GetImageDecodeWidth()
         => (int)((_config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280) * 2);
 
-    private static string BuildCacheKey(string filePath, long variant)
+    private int GetImageDecodeHeight()
+        => (int)((_config.PreviewHeightPx > 0 ? _config.PreviewHeightPx : 720) * 2);
+
+    private static string BuildCacheKey(string filePath, string variant)
     {
         try
         {
@@ -380,7 +406,8 @@ public class PreviewManager : IDisposable
         try
         {
             var decodeWidth = GetImageDecodeWidth();
-            var cacheKey = BuildCacheKey(filePath, decodeWidth);
+            var decodeHeight = GetImageDecodeHeight();
+            var cacheKey = BuildCacheKey(filePath, $"img-{decodeWidth}-{decodeHeight}");
 
             var cached = PreviewCache.GetImage(cacheKey);
             ImageDecodeResult result;
@@ -390,7 +417,8 @@ public class PreviewManager : IDisposable
             }
             else
             {
-                result = await Task.Run(() => ImagePreviewer.Decode(filePath, decodeWidth), token);
+                result = await Task.Run(
+                    () => ImagePreviewer.Decode(filePath, decodeWidth, decodeHeight, MaxImagePixels), token);
 
                 if (result.Bitmap != null)
                 {
@@ -434,7 +462,7 @@ public class PreviewManager : IDisposable
         try
         {
             var maxBytes = (long)(_config.MaxTextFileSizeKB * 1024);
-            var cacheKey = BuildCacheKey(filePath, maxBytes);
+            var cacheKey = BuildCacheKey(filePath, $"txt-{maxBytes}");
 
             var content = PreviewCache.GetText(cacheKey);
             if (content == null)
@@ -771,8 +799,12 @@ public class PreviewManager : IDisposable
             var kbd = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
             var combo = HotkeyText.FromVirtualKey((int)kbd.vkCode);
 
-            if (combo != null && TryHandleVideoHotkey(combo))
+            if (combo != null && IsVideoHotkey(combo))
+            {
+                // 钩子回调里只做匹配与投递，播放器操作统一回 UI 线程执行
+                PostToUi(() => TryHandleVideoHotkey(combo));
                 return (IntPtr)1;
+            }
         }
         catch (Exception ex)
         {
@@ -780,6 +812,16 @@ public class PreviewManager : IDisposable
         }
 
         return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
+    }
+
+    private bool IsVideoHotkey(KeyCombo combo)
+    {
+        return combo.Equals(_volumeUpCombo)
+            || combo.Equals(_volumeDownCombo)
+            || combo.Equals(_stepForwardCombo)
+            || combo.Equals(_stepBackwardCombo)
+            || combo.Equals(_speedUpCombo)
+            || combo.Equals(_speedDownCombo);
     }
 
     private bool TryHandleVideoHotkey(KeyCombo combo)

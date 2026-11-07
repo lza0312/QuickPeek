@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,6 +11,12 @@ namespace QuickPeek.Preview;
 
 public class TextPreviewer : ScrollViewer, IDisposable
 {
+    /// <summary>交给 TextBox 的最大字符数，避免超大文本把 UI 线程拖死。</summary>
+    private const int MaxRenderChars = 200_000;
+
+    /// <summary>GB18030 代码页，用于没有 BOM 的简体中文文本兜底。</summary>
+    private const uint CP_GB18030 = 54936;
+
     private TextBox? _textBox;
     private bool _isDisposed;
 
@@ -26,23 +34,44 @@ public class TextPreviewer : ScrollViewer, IDisposable
     {
         try
         {
-            var fileInfo = new FileInfo(filePath);
-            if (fileInfo.Length > maxSizeBytes)
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            var truncated = stream.Length > maxSizeBytes;
+            var length = (int)Math.Min(truncated ? maxSizeBytes : stream.Length, int.MaxValue);
+            var buffer = new byte[Math.Max(1, length)];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read < buffer.Length) Array.Resize(ref buffer, read);
+
+            var encoding = DetectEncoding(buffer);
+            var content = encoding.GetString(buffer).TrimStart('\uFEFF');
+
+            // 没有 BOM 的中文文本常被误判为 UTF-8；出现替换字符时尝试 GB18030
+            if (content.Contains('\uFFFD') &&
+                !encoding.Equals(Encoding.Unicode) &&
+                !encoding.Equals(Encoding.BigEndianUnicode))
             {
-                var sb = new StringBuilder();
-                sb.AppendLine($"文件过大，仅显示前 {(maxSizeBytes / 1024):F0} KB 预览");
-                sb.AppendLine(new string('─', 40));
-
-                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                var buffer = new byte[(int)Math.Min(maxSizeBytes, int.MaxValue)];
-                var read = stream.Read(buffer, 0, buffer.Length);
-
-                var encoding = DetectEncoding(buffer);
-                sb.Append(encoding.GetString(buffer, 0, read));
-                return sb.ToString();
+                var gb = DecodeWithCodePage(buffer, CP_GB18030);
+                if (gb != null && CountReplacement(gb) < CountReplacement(content))
+                {
+                    content = gb.TrimStart('\uFEFF');
+                }
             }
 
-            return ReadFileContent(filePath);
+            var notice = new StringBuilder();
+            if (truncated)
+            {
+                notice.AppendLine($"文件过大，仅显示前 {(maxSizeBytes / 1024):F0} KB 预览");
+                notice.AppendLine(new string('─', 40));
+            }
+
+            if (content.Length > MaxRenderChars)
+            {
+                content = content.Substring(0, MaxRenderChars);
+                notice.AppendLine();
+                notice.Append("（内容过长，已截断显示）");
+            }
+
+            return notice.Length > 0 ? notice + content : content;
         }
         catch
         {
@@ -50,19 +79,29 @@ public class TextPreviewer : ScrollViewer, IDisposable
         }
     }
 
-    private static string? ReadFileContent(string filePath)
+    private static int CountReplacement(string text) => text.Count(c => c == '\uFFFD');
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MultiByteToWideChar(
+        uint CodePage,
+        uint dwFlags,
+        byte[] lpMultiByteStr,
+        int cbMultiByte,
+        [Out] char[]? lpWideCharStr,
+        int cchWideChar);
+
+    private static string? DecodeWithCodePage(byte[] bytes, uint codePage)
     {
         try
         {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var buffer = new byte[Math.Min(stream.Length, 4096)];
-            var headerRead = stream.Read(buffer, 0, buffer.Length);
+            var charCount = MultiByteToWideChar(codePage, 0, bytes, bytes.Length, null, 0);
+            if (charCount <= 0) return null;
 
-            var encoding = DetectEncoding(buffer);
-            stream.Position = 0;
+            var chars = new char[charCount];
+            if (MultiByteToWideChar(codePage, 0, bytes, bytes.Length, chars, chars.Length) <= 0)
+                return null;
 
-            using var reader = new StreamReader(stream, encoding);
-            return reader.ReadToEnd();
+            return new string(chars);
         }
         catch
         {

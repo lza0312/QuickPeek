@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using QuickPeek.Core;
 using QuickPeek.Models;
 
 namespace QuickPeek.Preview;
@@ -47,6 +48,14 @@ public partial class VideoWindow : Window
         };
 
         Loaded += (_, _) => _handle = new WindowInteropHelper(this).Handle;
+
+        // 跨 DPI 显示器移动时重新按新显示器工作区定位
+        DpiChanged += (_, _) =>
+        {
+            ResizeToContent();
+            PositionWindow();
+            RenderHud();
+        };
     }
 
     private void Window_SourceInitialized(object? sender, EventArgs e)
@@ -171,7 +180,7 @@ public partial class VideoWindow : Window
         var maxW = _config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280;
         var maxH = _config.PreviewHeightPx > 0 ? _config.PreviewHeightPx : 720;
 
-        var screen = SystemParameters.WorkArea;
+        var screen = MonitorHelper.GetCursorWorkArea();
         var marginX = _config.PreviewMarginXPx;
         var marginY = _config.PreviewMarginYPx;
 
@@ -212,7 +221,7 @@ public partial class VideoWindow : Window
 
     private void PositionWindow()
     {
-        var screen = SystemParameters.WorkArea;
+        var screen = MonitorHelper.GetCursorWorkArea();
         var marginX = _config.PreviewMarginXPx;
         var marginY = _config.PreviewMarginYPx;
 

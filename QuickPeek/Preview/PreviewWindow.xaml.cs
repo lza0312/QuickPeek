@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using QuickPeek.Core;
 using QuickPeek.Models;
 using QuickPeek.Native;
 
@@ -39,6 +40,7 @@ public partial class PreviewWindow : Window
         _statusTimer.Tick += OnStatusTimerTick;
 
         Loaded += OnLoaded;
+        DpiChanged += (_, _) => PositionWindow();
         _instance = this;
     }
 
@@ -95,7 +97,7 @@ public partial class PreviewWindow : Window
 
     public void PositionWindow()
     {
-        var screen = SystemParameters.WorkArea;
+        var screen = MonitorHelper.GetCursorWorkArea();
         var marginX = _config.PreviewMarginXPx;
         var marginY = _config.PreviewMarginYPx;
         var scale = Math.Clamp(_config.PreviewScalePercent, 100, 300) / 100.0;

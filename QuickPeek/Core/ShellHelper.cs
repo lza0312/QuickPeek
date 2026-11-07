@@ -35,6 +35,15 @@ public class ShellHelper
         catch { return false; }
     }
 
+    /// <summary>只按窗口类名判断（不做进程查询），供低级钩子回调里快速使用。</summary>
+    public static bool IsExplorerClassWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
+        var className = GetClassNameSafe(hwnd);
+        return className == CabinetWClass || className == ExploreWClass;
+    }
+
     public static bool IsExplorerWindowAtPoint(POINT point)
     {
         var hwnd = PInvoke.WindowFromPoint(point);

@@ -51,19 +51,36 @@ public class ImagePreviewer : Border, IDisposable
     /// 在后台线程完成元数据读取与解码，返回已 Freeze 的位图。
     /// Freeze 之后才能安全地从解码线程交给 UI 线程使用。
     /// </summary>
-    public static ImageDecodeResult Decode(string filePath, int maxDecodeWidthPx)
+    public static ImageDecodeResult Decode(string filePath, int maxWidthPx, int maxHeightPx, long maxPixels)
     {
         try
         {
-            // 先只读元数据拿到真实分辨率，再按上限解码，避免超大图片占满内存
+            // 先只读元数据拿到真实分辨率，再按宽/高/总像素三重上限解码，避免超大图片占满内存
             var size = ReadPixelSize(filePath);
-            var bitmap = LoadImage(filePath, maxDecodeWidthPx, size.Width);
+            var decodeWidth = ComputeDecodeWidth(size.Width, size.Height, maxWidthPx, maxHeightPx, maxPixels);
+            var bitmap = LoadImage(filePath, decodeWidth, size.Width);
             return new ImageDecodeResult(bitmap, size.Width, size.Height);
         }
         catch
         {
             return new ImageDecodeResult(null, 0, 0);
         }
+    }
+
+    /// <summary>按宽、高、总像素三个上限计算等比缩放后的解码宽度（不放大）。</summary>
+    private static int ComputeDecodeWidth(int width, int height, int maxWidthPx, int maxHeightPx, long maxPixels)
+    {
+        if (width <= 0 || height <= 0) return 0;
+
+        var scale = 1.0;
+        if (maxWidthPx > 0 && width > maxWidthPx)
+            scale = Math.Min(scale, (double)maxWidthPx / width);
+        if (maxHeightPx > 0 && height > maxHeightPx)
+            scale = Math.Min(scale, (double)maxHeightPx / height);
+        if (maxPixels > 0 && (long)width * height > maxPixels)
+            scale = Math.Min(scale, Math.Sqrt((double)maxPixels / ((long)width * height)));
+
+        return Math.Max(1, (int)Math.Round(width * scale));
     }
 
     /// <summary>直接用现成的 BitmapSource 显示（例如视频解码失败时的 Shell 缩略图）。</summary>
@@ -115,7 +132,7 @@ public class ImagePreviewer : Border, IDisposable
         }
     }
 
-    private static BitmapSource? LoadImage(string filePath, int maxDecodeWidthPx, int trueWidth)
+    private static BitmapSource? LoadImage(string filePath, int decodeWidth, int trueWidth)
     {
         try
         {
@@ -131,9 +148,10 @@ public class ImagePreviewer : Border, IDisposable
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
             bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
             bitmap.UriSource = new Uri(filePath, UriKind.Absolute);
-            if (maxDecodeWidthPx > 0 && trueWidth > maxDecodeWidthPx)
+            if (decodeWidth > 0 && trueWidth > decodeWidth)
             {
-                bitmap.DecodePixelWidth = maxDecodeWidthPx;
+                // 只设宽度上限，高度由 WPF 等比推导，避免两个维度同时缩放产生变形
+                bitmap.DecodePixelWidth = decodeWidth;
             }
             bitmap.EndInit();
 
