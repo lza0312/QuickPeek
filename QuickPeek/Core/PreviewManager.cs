@@ -26,8 +26,7 @@ public class PreviewManager : IDisposable
     private int _previewVersion;
     private CancellationTokenSource? _pendingPreviewCts;
 
-    private IntPtr _keyboardHookHandle;
-    private LowLevelKeyboardProc? _keyboardHookDelegate;
+    private readonly VideoHotkeyHook _hotkeyHook;
 
     private KeyCombo? _volumeUpCombo;
     private KeyCombo? _volumeDownCombo;
@@ -43,6 +42,10 @@ public class PreviewManager : IDisposable
     {
         _config = SettingsService.Load();
         ParseHotkeys();
+
+        _hotkeyHook = new VideoHotkeyHook(
+            combo => _activeVideoPreviewer != null && IsVideoHotkey(combo),
+            combo => PostToUi(() => TryHandleVideoHotkey(combo)));
 
         _mouseHook = new GlobalMouseHook
         {
@@ -68,14 +71,14 @@ public class PreviewManager : IDisposable
 
         _mouseHook.HoverThresholdMs = _config.HoverDelayMs;
         _mouseHook.Start();
-        StartKeyboardHook();
+        _hotkeyHook.Start();
         Logger.Info("QuickPeek 已启动");
     }
 
     public void Stop()
     {
         _mouseHook.Stop();
-        StopKeyboardHook();
+        _hotkeyHook.Stop();
         HidePreview();
     }
 
@@ -89,12 +92,12 @@ public class PreviewManager : IDisposable
         if (_config.Enabled)
         {
             _mouseHook.Start();
-            StartKeyboardHook();
+            _hotkeyHook.Start();
         }
         else
         {
             _mouseHook.Stop();
-            StopKeyboardHook();
+            _hotkeyHook.Stop();
         }
         EnabledChanged?.Invoke(this, _config.Enabled);
     }
@@ -507,7 +510,7 @@ public class PreviewManager : IDisposable
         var previewWindow = PreviewWindow.Instance;
         if (previewWindow == null) return;
 
-        var thumb = ShellHelper.GetShellThumbnail(filePath, 1024);
+        var thumb = ShellThumbnailProvider.Get(filePath, 1024);
         if (thumb != null)
         {
             var img = new ImagePreviewer();
@@ -690,7 +693,7 @@ public class PreviewManager : IDisposable
         var previewWindow = Preview.PreviewWindow.Instance;
         if (previewWindow == null) return;
 
-        var thumb = ShellHelper.GetShellThumbnail(filePath, 1024);
+        var thumb = ShellThumbnailProvider.Get(filePath, 1024);
 
         if (thumb != null)
         {
@@ -718,26 +721,10 @@ public class PreviewManager : IDisposable
         _durationTimer.Stop();
     }
 
-    // ---------- 键盘钩子 ----------
-
-    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    // ---------- 修饰键状态 ----------
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
-
-    private const int WH_KEYBOARD_LL = 13;
-    private const int WM_KEYDOWN = 0x0100;
-    private const int WM_SYSKEYDOWN = 0x0104;
 
     private const int VK_CONTROL = 0x11;
     private const int VK_SHIFT = 0x10;
@@ -750,69 +737,6 @@ public class PreviewManager : IDisposable
     public static bool IsAltKeyPressed() => (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
     public static bool IsWinKeyPressed() =>
         (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-
-    private void StartKeyboardHook()
-    {
-        if (_keyboardHookHandle != IntPtr.Zero) return;
-
-        _keyboardHookDelegate = KeyboardHookProc;
-        var hModule = PInvoke.GetModuleHandle(null);
-        _keyboardHookHandle = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardHookDelegate, hModule, 0);
-
-        if (_keyboardHookHandle == IntPtr.Zero)
-        {
-            Logger.Error($"安装键盘钩子失败, err={Marshal.GetLastWin32Error()}");
-            _keyboardHookDelegate = null;
-        }
-    }
-
-    private void StopKeyboardHook()
-    {
-        if (_keyboardHookHandle == IntPtr.Zero) return;
-
-        UnhookWindowsHookEx(_keyboardHookHandle);
-        _keyboardHookHandle = IntPtr.Zero;
-        _keyboardHookDelegate = null;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct KBDLLHOOKSTRUCT
-    {
-        public uint vkCode;
-        public uint scanCode;
-        public uint flags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-
-    private IntPtr KeyboardHookProc(int nCode, IntPtr wParam, IntPtr lParam)
-    {
-        if (nCode < 0 || _activeVideoPreviewer == null)
-            return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
-
-        try
-        {
-            var msg = wParam.ToInt32();
-            if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
-                return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
-
-            var kbd = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            var combo = HotkeyText.FromVirtualKey((int)kbd.vkCode);
-
-            if (combo != null && IsVideoHotkey(combo))
-            {
-                // 钩子回调里只做匹配与投递，播放器操作统一回 UI 线程执行
-                PostToUi(() => TryHandleVideoHotkey(combo));
-                return (IntPtr)1;
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Error("键盘钩子回调异常", ex);
-        }
-
-        return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
-    }
 
     private bool IsVideoHotkey(KeyCombo combo)
     {
@@ -1023,6 +947,7 @@ public class PreviewManager : IDisposable
         _videoPreviewer = null;
 
         _mouseHook.Dispose();
+        _hotkeyHook.Dispose();
 
         GC.SuppressFinalize(this);
     }

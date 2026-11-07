@@ -13,12 +13,13 @@ public class SettingsService
         "QuickPeek");
 
     private static readonly string ConfigPath = Path.Combine(ConfigDir, "settings.json");
-    private static readonly string BackupPath = ConfigPath + ".bak";
-    private static readonly string TempPath = ConfigPath + ".tmp";
 
-    public static AppConfig Load()
+    public static AppConfig Load() => LoadFrom(ConfigPath);
+
+    /// <summary>从指定路径读取；主文件损坏或缺失时回退 .bak，并对结果做范围钳制。</summary>
+    public static AppConfig LoadFrom(string configPath)
     {
-        var config = TryLoad(ConfigPath) ?? TryLoad(BackupPath);
+        var config = TryLoad(configPath) ?? TryLoad(configPath + ".bak");
         if (config == null) return AppConfig.Default;
 
         config.Normalize();
@@ -50,30 +51,36 @@ public class SettingsService
         }
     }
 
-    public static void Save(AppConfig config)
+    public static void Save(AppConfig config) => SaveTo(config, ConfigPath);
+
+    /// <summary>原子写入指定路径：临时文件 + File.Replace，并保留 .bak 备份。</summary>
+    public static void SaveTo(AppConfig config, string configPath)
     {
+        var tempPath = configPath + ".tmp";
+        var backupPath = configPath + ".bak";
+
         try
         {
-            Directory.CreateDirectory(ConfigDir);
-            var json = JsonConvert.SerializeObject(config, Formatting.Indented);
-            File.WriteAllText(TempPath, json);
+            var dir = Path.GetDirectoryName(configPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            // 先写临时文件再替换，避免写入过程中崩溃留下半截配置；
-            // File.Replace 会同时生成 .bak，读取失败时回退到备份
-            if (File.Exists(ConfigPath))
+            var json = JsonConvert.SerializeObject(config, Formatting.Indented);
+            File.WriteAllText(tempPath, json);
+
+            if (File.Exists(configPath))
             {
-                File.Replace(TempPath, ConfigPath, BackupPath, ignoreMetadataErrors: true);
+                File.Replace(tempPath, configPath, backupPath, ignoreMetadataErrors: true);
             }
             else
             {
-                File.Move(TempPath, ConfigPath);
+                File.Move(tempPath, configPath);
             }
         }
         catch
         {
             try
             {
-                if (File.Exists(TempPath)) File.Delete(TempPath);
+                if (File.Exists(tempPath)) File.Delete(tempPath);
             }
             catch
             {
