@@ -19,7 +19,9 @@ public class PreviewManager : IDisposable
     private AppConfig _config;
     private string? _lastPreviewedFile;
     private bool _isDisposed;
+    private VideoPreviewer? _videoPreviewer;
     private VideoPreviewer? _activeVideoPreviewer;
+    private string? _currentVideoPath;
 
     private int _previewVersion;
     private CancellationTokenSource? _pendingPreviewCts;
@@ -98,6 +100,9 @@ public class PreviewManager : IDisposable
     }
 
     private int _isHoverProcessing;
+    private long _hoverStartedTicks;
+
+    private const long HoverWatchdogMs = 10_000;
 
     /// <summary>
     /// 悬停判定会调用 UI Automation / Shell COM，单次可达数百毫秒。
@@ -107,7 +112,17 @@ public class PreviewManager : IDisposable
     {
         if (!_config.Enabled) return;
         if (IsPointOverPreviewWindow(pt)) return;
-        if (System.Threading.Interlocked.Exchange(ref _isHoverProcessing, 1) == 1) return;
+
+        if (Interlocked.CompareExchange(ref _isHoverProcessing, 1, 0) != 0)
+        {
+            // 看门狗：UIA 偶尔会卡住不返回，超时后强制允许下一次判定，
+            // 否则悬停功能会永久失效
+            var started = Interlocked.Read(ref _hoverStartedTicks);
+            if (Environment.TickCount64 - started < HoverWatchdogMs) return;
+
+            Logger.Debug("上一次悬停判定超过 10 秒未结束，强制复位");
+        }
+        Interlocked.Exchange(ref _hoverStartedTicks, Environment.TickCount64);
 
         var point = pt;
 
@@ -283,13 +298,14 @@ public class PreviewManager : IDisposable
 
         var fileName = Path.GetFileName(filePath);
 
-        // 切换预览前必须真正销毁上一个播放器。之前只是把字段置空，
-        // 旧 Player 仍然活着并继续输出音频。
-        if (_activeVideoPreviewer != null)
+        // 先解绑原生渲染宿主，再停止播放器；Player 复用，不在此销毁
+        if (category != FileCategory.Video && category != FileCategory.Audio)
         {
-            _activeVideoPreviewer.Dispose();
-            _activeVideoPreviewer = null;
+            Preview.VideoWindow.Instance?.HidePreview();
+            _currentVideoPath = null;
         }
+        _activeVideoPreviewer?.Stop();
+        _activeVideoPreviewer = null;
 
         // 先标记，避免解码期间同一个文件被重复触发、反复取消
         _lastPreviewedFile = filePath;
@@ -297,7 +313,6 @@ public class PreviewManager : IDisposable
         switch (category)
         {
             case FileCategory.Image:
-                Preview.VideoWindow.Instance?.HidePreview();
                 _ = LoadImagePreviewAsync(filePath, fileName, version, cts.Token);
                 break;
 
@@ -308,7 +323,8 @@ public class PreviewManager : IDisposable
                 previewWindow.ClearContent();
                 previewWindow.Hide();
 
-                var video = new VideoPreviewer();
+                _currentVideoPath = filePath;
+                var video = EnsureVideoPreviewer();
                 if (video.Load(filePath, true, true, _config.ImageSizeMode, _config))
                 {
                     _activeVideoPreviewer = video;
@@ -320,27 +336,14 @@ public class PreviewManager : IDisposable
 
                     StartDurationTimer();
                     Logger.Debug($"{(category == FileCategory.Audio ? "音频" : "视频")}预览已加载 {fileName}");
-
-                    video.PlaybackFailed += (_, reason) =>
-                        PostToUi(() => ShowVideoFallback(filePath, fileName, reason));
-
-                    video.VideoSizeChanged += (_, size) =>
-                        PostToUi(() =>
-                        {
-                            var vw = GetVideoWindow();
-                            vw.ResizeToVideo(size.Width, size.Height);
-                            vw.UpdateFileInfo(BuildFileInfo(filePath, size.Width, size.Height));
-                        });
                 }
                 else
                 {
-                    video.Dispose();
                     ShowVideoFallback(filePath, fileName, "Load 返回失败");
                 }
                 break;
 
             case FileCategory.Text:
-                Preview.VideoWindow.Instance?.HidePreview();
                 _ = LoadTextPreviewAsync(filePath, fileName, version, cts.Token);
                 break;
         }
@@ -555,14 +558,11 @@ public class PreviewManager : IDisposable
                 previewWindow.Hide();
             }
 
-            if (_activeVideoPreviewer != null)
-            {
-                _activeVideoPreviewer.Dispose();
-                _activeVideoPreviewer = null;
-            }
-
-            // 先释放播放器再解绑 Host，避免宿主继续渲染已释放的实例
+            // 先解绑 Host，再停止播放器，避免宿主继续渲染已释放的实例
             Preview.VideoWindow.Instance?.HidePreview();
+            _activeVideoPreviewer?.Stop();
+            _activeVideoPreviewer = null;
+            _currentVideoPath = null;
         }
         catch (Exception ex)
         {
@@ -570,6 +570,42 @@ public class PreviewManager : IDisposable
         }
 
         _lastPreviewedFile = null;
+    }
+
+    /// <summary>整个进程只创建一个播放器，切换视频文件时复用。</summary>
+    private VideoPreviewer EnsureVideoPreviewer()
+    {
+        if (_videoPreviewer != null) return _videoPreviewer;
+
+        var previewer = new VideoPreviewer();
+        _videoPreviewer = previewer;
+
+        previewer.PlaybackFailed += (_, reason) =>
+        {
+            var path = _currentVideoPath;
+            if (path == null) return;
+
+            PostToUi(() =>
+            {
+                // 已经切换到别的预览时忽略迟到的失败事件
+                if (_activeVideoPreviewer != previewer) return;
+                ShowVideoFallback(path, Path.GetFileName(path), reason);
+            });
+        };
+
+        previewer.VideoSizeChanged += (_, size) =>
+        {
+            var path = _currentVideoPath;
+            PostToUi(() =>
+            {
+                if (_activeVideoPreviewer != previewer) return;
+                var vw = GetVideoWindow();
+                vw.ResizeToVideo(size.Width, size.Height);
+                vw.UpdateFileInfo(BuildFileInfo(path ?? string.Empty, size.Width, size.Height));
+            });
+        };
+
+        return previewer;
     }
 
     private VideoWindow GetVideoWindow()
@@ -619,11 +655,9 @@ public class PreviewManager : IDisposable
         StopDurationTimer();
         Preview.VideoWindow.Instance?.HidePreview();
 
-        if (_activeVideoPreviewer != null)
-        {
-            _activeVideoPreviewer.Dispose();
-            _activeVideoPreviewer = null;
-        }
+        _activeVideoPreviewer?.Stop();
+        _activeVideoPreviewer = null;
+        _currentVideoPath = null;
 
         var previewWindow = Preview.PreviewWindow.Instance;
         if (previewWindow == null) return;
@@ -940,6 +974,12 @@ public class PreviewManager : IDisposable
         _isDisposed = true;
 
         Stop();
+
+        // 先解绑渲染宿主，再释放复用的播放器
+        Preview.VideoWindow.Instance?.HidePreview();
+        _videoPreviewer?.Dispose();
+        _videoPreviewer = null;
+
         _mouseHook.Dispose();
 
         GC.SuppressFinalize(this);

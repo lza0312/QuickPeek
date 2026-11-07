@@ -48,21 +48,32 @@ public class VideoPreviewer : IDisposable
         _config = config;
         _autoPlay = autoPlay;
 
+        if (_isDisposed) return false;
         if (!VideoEngine.EnsureStarted()) return false;
 
         try
         {
-            _player = new Player(new FlyleafLib.Config())
+            if (_player == null)
             {
-                LoopPlayback = loop
-            };
+                // 整个进程只创建一个 Player，切换文件时复用，
+                // 避免每次悬停都重建 FFmpeg 解码上下文
+                _player = new Player(new FlyleafLib.Config());
+                _player.OpenCompleted += OnOpenCompleted;
+                _player.PlaybackStopped += OnPlaybackStopped;
+            }
+            else
+            {
+                try { _player.Video.PropertyChanged -= OnVideoPropertyChanged; } catch { }
+            }
+
+            VideoWidth = 0;
+            VideoHeight = 0;
 
             var defaultVolume = (int)Math.Round(Math.Clamp(config.VideoDefaultVolume, 0, 1) * 100);
+            _player.LoopPlayback = loop;
+            _player.Audio.Mute = false;
             _player.Audio.Volume = defaultVolume;
             _player.Speed = ClampSpeed(config.VideoDefaultSpeed);
-
-            _player.OpenCompleted += OnOpenCompleted;
-            _player.PlaybackStopped += OnPlaybackStopped;
 
             _player.OpenAsync(filePath);
             return true;
@@ -70,8 +81,26 @@ public class VideoPreviewer : IDisposable
         catch (Exception ex)
         {
             Logger.Error($"Flyleaf 打开视频失败: {filePath}", ex);
-            Dispose();
             return false;
+        }
+    }
+
+    /// <summary>停止当前播放但保留 Player 以便下次复用。调用前应先解绑渲染宿主。</summary>
+    public void Stop()
+    {
+        var player = _player;
+        if (player == null || _isDisposed) return;
+
+        try
+        {
+            // 先静音再停止，避免停止瞬间漏音
+            player.Audio.Mute = true;
+            player.Audio.Volume = 0;
+            player.Stop();
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug($"停止播放器异常: {ex.Message}");
         }
     }
 

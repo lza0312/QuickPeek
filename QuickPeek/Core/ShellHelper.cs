@@ -110,8 +110,8 @@ public class ShellHelper
                     var currentDir = GetExplorerCurrentDirectory(topExplorer, out _);
                     if (string.IsNullOrEmpty(currentDir)) return false;
 
-                    var fullPath = Path.Combine(currentDir, itemName);
-                    if (File.Exists(fullPath) || Directory.Exists(fullPath))
+                    var fullPath = ResolveExplorerItemPath(currentDir, itemName);
+                    if (fullPath != null)
                     {
                         filePath = fullPath;
                         return true;
@@ -138,6 +138,34 @@ public class ShellHelper
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 资源管理器「隐藏已知文件扩展名」时，UIA 暴露的 Name 不含扩展名，
+    /// 直接拼接会找不到文件。这里再做一次目录枚举按文件名匹配。
+    /// </summary>
+    private static string? ResolveExplorerItemPath(string directory, string itemName)
+    {
+        var direct = Path.Combine(directory, itemName);
+        if (File.Exists(direct) || Directory.Exists(direct)) return direct;
+
+        try
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var name = Path.GetFileName(entry);
+                if (string.Equals(name, itemName, StringComparison.OrdinalIgnoreCase))
+                    return entry;
+
+                if (string.Equals(Path.GetFileNameWithoutExtension(name), itemName, StringComparison.OrdinalIgnoreCase))
+                    return entry;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     public static bool HitTestExplorerBlankArea(POINT screenPoint)
