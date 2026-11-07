@@ -4,7 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using QuickPeek.Core;
 using QuickPeek.Models;
-using QuickPeek.Services;
 
 namespace QuickPeek;
 
@@ -18,7 +17,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _previewManager = previewManager;
-        _config = SettingsService.Load();
+        _config = _previewManager.GetConfig();
         _isDarkTheme = _config.UseDarkTheme;
 
         LoadConfigToUi();
@@ -152,10 +151,6 @@ public partial class MainWindow : Window
         if (double.TryParse(MaxTextSizeTextBox.Text, out double ts) && ts >= 1 && ts <= 102400)
             _config.MaxTextFileSizeKB = ts;
 
-        // 自动播放、循环播放与播放信息常开，不再提供开关
-        _config.AutoPlayVideo = true;
-        _config.ShowVideoDuration = true;
-
         if (int.TryParse(DefaultVolumeTextBox.Text, out int defVolume) && defVolume >= 0 && defVolume <= 100)
             _config.VideoDefaultVolume = defVolume / 100.0;
         if (double.TryParse(DefaultSpeedTextBox.Text, out double defSpeed) && defSpeed >= 0.1 && defSpeed <= 8)
@@ -182,6 +177,7 @@ public partial class MainWindow : Window
         _config.VideoHotkeySpeedUp = SpeedUpHotkeyTextBox.Text;
         _config.VideoHotkeySpeedDown = SpeedDownHotkeyTextBox.Text;
 
+        _config.Normalize();
         ApplyUiScale();
     }
 
@@ -393,7 +389,6 @@ public partial class MainWindow : Window
         try
         {
             ApplyConfigFromUi();
-            SettingsService.Save(_config);
             _previewManager.UpdateConfig(_config);
 
             _isDarkTheme = _config.UseDarkTheme;
@@ -413,7 +408,6 @@ public partial class MainWindow : Window
         try
         {
             ApplyConfigFromUi();
-            SettingsService.Save(_config);
             _previewManager.UpdateConfig(_config);
 
             ThemedDialog.Info(this, "设置已保存并应用。");
@@ -435,6 +429,7 @@ public partial class MainWindow : Window
             _isDarkTheme = _config.UseDarkTheme;
             LoadConfigToUi();
             ApplyTheme();
+            _previewManager.UpdateConfig(_config);
         }
     }
 }

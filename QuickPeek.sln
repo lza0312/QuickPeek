@@ -5,10 +5,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickPeek", "QuickPeek\QuickPeek.csproj", "{7BBB1599-0A97-4D4D-B984-B38A40D760CD}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickPeek.InjectorHost", "QuickPeek.InjectorHost\QuickPeek.InjectorHost.csproj", "{1841C1BA-E91E-40E8-9EC1-CB354CC53DBF}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuickPeek.Injector", "QuickPeek.Injector\QuickPeek.Injector.csproj", "{95FCFC5F-974E-42BA-8723-C44A8839F905}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -22,13 +18,5 @@ Global
 		{7BBB1599-0A97-4D4D-B984-B38A40D760CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7BBB1599-0A97-4D4D-B984-B38A40D760CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7BBB1599-0A97-4D4D-B984-B38A40D760CD}.Release|Any CPU.Build.0 = Release|Any CPU
-		{1841C1BA-E91E-40E8-9EC1-CB354CC53DBF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{1841C1BA-E91E-40E8-9EC1-CB354CC53DBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{1841C1BA-E91E-40E8-9EC1-CB354CC53DBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{1841C1BA-E91E-40E8-9EC1-CB354CC53DBF}.Release|Any CPU.Build.0 = Release|Any CPU
-		{95FCFC5F-974E-42BA-8723-C44A8839F905}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{95FCFC5F-974E-42BA-8723-C44A8839F905}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{95FCFC5F-974E-42BA-8723-C44A8839F905}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{95FCFC5F-974E-42BA-8723-C44A8839F905}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

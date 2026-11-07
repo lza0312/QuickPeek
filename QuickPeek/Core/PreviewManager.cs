@@ -22,12 +22,20 @@ public class PreviewManager : IDisposable
     private IntPtr _keyboardHookHandle;
     private LowLevelKeyboardProc? _keyboardHookDelegate;
 
+    private KeyCombo? _volumeUpCombo;
+    private KeyCombo? _volumeDownCombo;
+    private KeyCombo? _stepForwardCombo;
+    private KeyCombo? _stepBackwardCombo;
+    private KeyCombo? _speedUpCombo;
+    private KeyCombo? _speedDownCombo;
+
     public event EventHandler<bool>? EnabledChanged;
     public bool IsEnabled => _config.Enabled;
 
     public PreviewManager()
     {
         _config = SettingsService.Load();
+        ParseHotkeys();
 
         _mouseHook = new GlobalMouseHook
         {
@@ -68,6 +76,7 @@ public class PreviewManager : IDisposable
     {
         _config = config;
         SettingsService.Save(_config);
+        ParseHotkeys();
         _mouseHook.HoverThresholdMs = _config.HoverDelayMs;
 
         if (_config.Enabled)
@@ -92,6 +101,7 @@ public class PreviewManager : IDisposable
     private void OnHoverDetected(object? sender, PInvoke.POINT pt)
     {
         if (!_config.Enabled) return;
+        if (IsPointOverPreviewWindow(pt)) return;
         if (System.Threading.Interlocked.Exchange(ref _isHoverProcessing, 1) == 1) return;
 
         var point = pt;
@@ -108,7 +118,7 @@ public class PreviewManager : IDisposable
                 }
 
                 var category = FileTypeDetector.Detect(filePath);
-                Logger.Info($"悬停命中 {filePath} ({category})");
+                Logger.Debug($"悬停命中 {filePath} ({category})");
 
                 switch (category)
                 {
@@ -153,31 +163,63 @@ public class PreviewManager : IDisposable
         else dispatcher.BeginInvoke(action);
     }
 
+    /// <summary>光标是否落在自己的预览窗口/视频窗口上（含其播放信息浮层下方的画面）。</summary>
+    private static bool IsPointOverPreviewWindow(PInvoke.POINT pt)
+    {
+        var hwnd = PInvoke.WindowFromPoint(pt);
+        if (hwnd == IntPtr.Zero) return false;
+
+        var root = PInvoke.GetAncestor(hwnd, 2); // GA_ROOT
+        if (root != IntPtr.Zero) hwnd = root;
+
+        var previewWindow = PreviewWindow.Instance;
+        if (previewWindow != null && previewWindow.Handle == hwnd) return true;
+
+        var videoWindow = VideoWindow.Instance;
+        if (videoWindow != null && videoWindow.Handle == hwnd) return true;
+
+        return false;
+    }
+
+    private static bool IsExplorerForeground()
+        => ShellHelper.IsExplorerWindow(PInvoke.GetForegroundWindow());
+
     private void OnMouseClicked(object? sender, EventArgs e)
     {
+        // 在自家预览窗口上点击不应把预览关掉（否则点视频区域也会闪一下消失）
+        if (PInvoke.GetCursorPos(out var pt) && IsPointOverPreviewWindow(pt)) return;
         HidePreview();
     }
 
     private void OnMouseWheelScrolled(object? sender, WheelEventArgs e)
     {
-        if (_activeVideoPreviewer != null && IsCtrlKeyPressed() && _config.EnableVideoCtrlWheel)
+        if (!PInvoke.GetCursorPos(out var pt)) return;
+
+        var overOwnPreview = IsPointOverPreviewWindow(pt);
+
+        // Ctrl+滚轮只在资源管理器前台或光标位于预览窗口内时生效
+        if (_activeVideoPreviewer != null && _config.EnableVideoCtrlWheel && IsCtrlKeyPressed()
+            && (overOwnPreview || IsExplorerForeground()))
         {
             var message = e.Delta > 0 ? _activeVideoPreviewer.VolumeUp() : _activeVideoPreviewer.VolumeDown();
             ShowStatus(message);
             e.Handled = true;
             return;
         }
-        HidePreview();
+
+        if (!overOwnPreview) HidePreview();
     }
 
     private void OnMouseWheelScrolledH(object? sender, WheelEventArgs e)
     {
-        if (_activeVideoPreviewer != null && IsCtrlKeyPressed() && _config.EnableVideoCtrlWheelH)
-        {
-            var message = e.Delta > 0 ? _activeVideoPreviewer.StepForward() : _activeVideoPreviewer.StepBackward();
-            ShowStatus(message);
-            e.Handled = true;
-        }
+        if (_activeVideoPreviewer == null || !_config.EnableVideoCtrlWheelH || !IsCtrlKeyPressed())
+            return;
+        if (!PInvoke.GetCursorPos(out var pt)) return;
+        if (!IsPointOverPreviewWindow(pt) && !IsExplorerForeground()) return;
+
+        var message = e.Delta > 0 ? _activeVideoPreviewer.StepForward() : _activeVideoPreviewer.StepBackward();
+        ShowStatus(message);
+        e.Handled = true;
     }
 
     private void OnMouseDoubleClicked(object? sender, PInvoke.POINT pt)
@@ -256,6 +298,7 @@ public class PreviewManager : IDisposable
                 else
                 {
                     img.Dispose();
+                    ShowImageFallback(filePath, fileName, "解码失败");
                 }
                 break;
 
@@ -267,7 +310,7 @@ public class PreviewManager : IDisposable
                 previewWindow.Hide();
 
                 var video = new VideoPreviewer();
-                if (video.Load(filePath, _config.AutoPlayVideo, true, _config.ImageSizeMode, _config))
+                if (video.Load(filePath, true, true, _config.ImageSizeMode, _config))
                 {
                     _activeVideoPreviewer = video;
 
@@ -278,7 +321,7 @@ public class PreviewManager : IDisposable
 
                     _lastPreviewedFile = filePath;
                     StartDurationTimer();
-                    Logger.Info($"{(category == FileCategory.Audio ? "音频" : "视频")}预览已加载 {fileName}");
+                    Logger.Debug($"{(category == FileCategory.Audio ? "音频" : "视频")}预览已加载 {fileName}");
 
                     video.PlaybackFailed += (_, reason) =>
                         PostToUi(() => ShowVideoFallback(filePath, fileName, reason));
@@ -310,9 +353,45 @@ public class PreviewManager : IDisposable
                 else
                 {
                     text.Dispose();
+                    previewWindow.ClearContent();
+                    previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+                    previewWindow.SetStatus("无法读取该文本文件（可能编码不支持或文件被占用）");
+                    _lastPreviewedFile = filePath;
                 }
                 break;
         }
+    }
+
+    /// <summary>
+    /// 图片无法解码（SVG/HEIC/RAW/PSD 等缺少解码器）时，用系统 Shell 缩略图兜底。
+    /// </summary>
+    private void ShowImageFallback(string filePath, string fileName, string reason)
+    {
+        Logger.Debug($"图片解码失败，回退缩略图: {filePath} ({reason})");
+
+        var previewWindow = PreviewWindow.Instance;
+        if (previewWindow == null) return;
+
+        var thumb = ShellHelper.GetShellThumbnail(filePath, 1024);
+        if (thumb != null)
+        {
+            var img = new ImagePreviewer();
+            if (img.LoadFromBitmap(thumb, _config.ImageSizeMode))
+            {
+                previewWindow.SetContent(img);
+                previewWindow.ShowPreview(fileName, BuildFileInfo(filePath, img.PixelWidth, img.PixelHeight),
+                    img.PixelWidth, img.PixelHeight);
+                previewWindow.SetStatus("无法解码该图片格式，已显示系统缩略图");
+                _lastPreviewedFile = filePath;
+                return;
+            }
+            img.Dispose();
+        }
+
+        previewWindow.ClearContent();
+        previewWindow.ShowPreview(fileName, BuildFileInfo(filePath));
+        previewWindow.SetStatus("无法解码该图片格式");
+        _lastPreviewedFile = filePath;
     }
 
     /// <summary>
@@ -495,10 +574,14 @@ public class PreviewManager : IDisposable
     private const int VK_CONTROL = 0x11;
     private const int VK_SHIFT = 0x10;
     private const int VK_MENU = 0x12;
+    private const int VK_LWIN = 0x5B;
+    private const int VK_RWIN = 0x5C;
 
     public static bool IsCtrlKeyPressed() => (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     public static bool IsShiftKeyPressed() => (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     public static bool IsAltKeyPressed() => (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+    public static bool IsWinKeyPressed() =>
+        (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
 
     private void StartKeyboardHook()
     {
@@ -565,12 +648,12 @@ public class PreviewManager : IDisposable
 
         string? message = null;
 
-        if (Matches(combo, _config.VideoHotkeyVolumeUp)) message = _activeVideoPreviewer.VolumeUp();
-        else if (Matches(combo, _config.VideoHotkeyVolumeDown)) message = _activeVideoPreviewer.VolumeDown();
-        else if (Matches(combo, _config.VideoHotkeyStepFwd)) message = _activeVideoPreviewer.StepForward();
-        else if (Matches(combo, _config.VideoHotkeyStepBack)) message = _activeVideoPreviewer.StepBackward();
-        else if (Matches(combo, _config.VideoHotkeySpeedUp)) message = _activeVideoPreviewer.SpeedUp();
-        else if (Matches(combo, _config.VideoHotkeySpeedDown)) message = _activeVideoPreviewer.SpeedDown();
+        if (combo.Equals(_volumeUpCombo)) message = _activeVideoPreviewer.VolumeUp();
+        else if (combo.Equals(_volumeDownCombo)) message = _activeVideoPreviewer.VolumeDown();
+        else if (combo.Equals(_stepForwardCombo)) message = _activeVideoPreviewer.StepForward();
+        else if (combo.Equals(_stepBackwardCombo)) message = _activeVideoPreviewer.StepBackward();
+        else if (combo.Equals(_speedUpCombo)) message = _activeVideoPreviewer.SpeedUp();
+        else if (combo.Equals(_speedDownCombo)) message = _activeVideoPreviewer.SpeedDown();
 
         if (message == null) return false;
 
@@ -580,10 +663,14 @@ public class PreviewManager : IDisposable
         return true;
     }
 
-    private static bool Matches(KeyCombo actual, string? configured)
+    private void ParseHotkeys()
     {
-        var expected = HotkeyText.Parse(configured);
-        return expected != null && expected.Equals(actual);
+        _volumeUpCombo = HotkeyText.Parse(_config.VideoHotkeyVolumeUp);
+        _volumeDownCombo = HotkeyText.Parse(_config.VideoHotkeyVolumeDown);
+        _stepForwardCombo = HotkeyText.Parse(_config.VideoHotkeyStepFwd);
+        _stepBackwardCombo = HotkeyText.Parse(_config.VideoHotkeyStepBack);
+        _speedUpCombo = HotkeyText.Parse(_config.VideoHotkeySpeedUp);
+        _speedDownCombo = HotkeyText.Parse(_config.VideoHotkeySpeedDown);
     }
 
     // ---------- 发送 BackSpace ----------

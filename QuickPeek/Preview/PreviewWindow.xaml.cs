@@ -18,6 +18,10 @@ public partial class PreviewWindow : Window
 
     private AppConfig _config = AppConfig.Default;
     private IntPtr _handle;
+
+    /// <summary>窗口句柄，供外部判断光标是否落在预览窗口内。</summary>
+    public IntPtr Handle => _handle;
+
     private readonly System.Windows.Threading.DispatcherTimer _statusTimer;
     private int _contentWidth;
     private int _contentHeight;
@@ -46,10 +50,11 @@ public partial class PreviewWindow : Window
         // 不显示文件信息时：标题栏隐藏、窗口底色去掉 → 真正的无边框悬浮
         if (config.ShowFileInfo)
         {
-            byte bgAlpha = (byte)(230 * config.PreviewWindowOpacity);
+            var opacity = Math.Clamp(config.PreviewWindowOpacity, 0.0, 1.0);
+            byte bgAlpha = (byte)(230 * opacity);
             RootBorder.Background = new SolidColorBrush(Color.FromArgb(bgAlpha, 0x1E, 0x1E, 0x1E));
             HeaderBorder.Visibility = Visibility.Visible;
-            HeaderBorder.Background = new SolidColorBrush(Color.FromArgb((byte)(242 * config.PreviewWindowOpacity), 0x2D, 0x2D, 0x2D));
+            HeaderBorder.Background = new SolidColorBrush(Color.FromArgb((byte)(242 * opacity), 0x2D, 0x2D, 0x2D));
         }
         else
         {
@@ -253,16 +258,5 @@ public partial class PreviewWindow : Window
         _handle = new WindowInteropHelper(this).Handle;
         MakeToolWindow();
 
-        var hwndSource = HwndSource.FromHwnd(_handle);
-        hwndSource?.AddHook(WndProc);
-    }
-
-    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        if (msg == Win32Constants.WM_MOUSEWHEEL)
-        {
-            handled = true;
-        }
-        return IntPtr.Zero;
     }
 }

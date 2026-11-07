@@ -32,8 +32,6 @@ public class AppConfig
     public double PreviewWindowOpacity { get; set; } = 0.95;
     public double PreviewContentOpacity { get; set; } = 1.0;
     public bool ShowFileInfo { get; set; } = true;
-    public bool ShowVideoDuration { get; set; } = true;
-    public bool AutoPlayVideo { get; set; } = true;
     public double MaxTextFileSizeKB { get; set; } = 2048.0;
     public bool ShowImages { get; set; } = true;
     public bool ShowVideos { get; set; } = true;
@@ -64,4 +62,31 @@ public class AppConfig
     public string VideoHotkeySpeedDown { get; set; } = "Control+Down";
 
     public static AppConfig Default => new();
+
+    /// <summary>把各项数值钳制到可用范围，避免手改配置或旧配置文件导致异常尺寸/透明度。</summary>
+    public void Normalize()
+    {
+        HoverDelayMs = Math.Clamp(HoverDelayMs, 100, 5000);
+        PreviewWidthPx = Math.Clamp(PreviewWidthPx, 100, 7680);
+        PreviewHeightPx = Math.Clamp(PreviewHeightPx, 100, 4320);
+        PreviewMarginXPx = Math.Clamp(PreviewMarginXPx, 0, 200);
+        PreviewMarginYPx = Math.Clamp(PreviewMarginYPx, 0, 200);
+        PreviewScalePercent = Math.Clamp(PreviewScalePercent, 100, 300);
+        UiScalePercent = Math.Clamp(UiScalePercent, 100, 300);
+        PreviewWindowOpacity = Math.Clamp(PreviewWindowOpacity, 0.2, 1.0);
+        PreviewContentOpacity = Math.Clamp(PreviewContentOpacity, 0.2, 1.0);
+        MaxTextFileSizeKB = Math.Clamp(MaxTextFileSizeKB, 1, 102400);
+        VideoDefaultVolume = Math.Clamp(VideoDefaultVolume, 0.0, 1.0);
+        VideoDefaultSpeed = Math.Clamp(VideoDefaultSpeed, 0.1, 8.0);
+        VideoVolumeStepPercent = Math.Clamp(VideoVolumeStepPercent, 1, 100);
+        VideoSeekStepSeconds = Math.Clamp(VideoSeekStepSeconds, 0.5, 60.0);
+        VideoSpeedStepMultiplier = Math.Clamp(VideoSpeedStepMultiplier, 0.05, 2.0);
+        VideoSpeedMin = Math.Clamp(VideoSpeedMin, 0.1, 4.0);
+        VideoSpeedMax = Math.Clamp(VideoSpeedMax, VideoSpeedMin, 8.0);
+
+        if (!Enum.IsDefined(typeof(CornerPosition), PreviewCorner))
+            PreviewCorner = CornerPosition.BottomRight;
+        if (!Enum.IsDefined(typeof(PreviewSizeMode), ImageSizeMode))
+            ImageSizeMode = PreviewSizeMode.MaxOriginalRatio;
+    }
 }

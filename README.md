@@ -62,8 +62,6 @@ QuickPeek/ffmpeg/bin/
 | 目录 | 说明 |
 | --- | --- |
 | `QuickPeek` | WPF 主程序：悬停钩子、预览窗口、播放器、设置界面 |
-| `QuickPeek.Injector` | 注入辅助库（实验性） |
-| `QuickPeek.InjectorHost` | 注入命令行宿主（实验性） |
 
 ## 使用说明
 

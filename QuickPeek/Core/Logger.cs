@@ -27,6 +27,30 @@ public static class Logger
         Write("DEBUG", message);
     }
 
+    private const long MaxLogBytes = 1_000_000;
+    private const int MaxArchivedFiles = 2;
+
+    private static string ArchivePath(int index) => Path.Combine(_dir, $"quickpeek.{index}.log");
+
+    /// <summary>超过上限时滚动保留 quickpeek.1.log / quickpeek.2.log，避免日志无限增长。</summary>
+    private static void RotateIfNeeded()
+    {
+        var fi = new FileInfo(_logPath);
+        if (!fi.Exists || fi.Length < MaxLogBytes) return;
+
+        for (int i = MaxArchivedFiles - 1; i >= 1; i--)
+        {
+            var source = ArchivePath(i);
+            if (!File.Exists(source)) continue;
+
+            var target = ArchivePath(i + 1);
+            if (File.Exists(target)) File.Delete(target);
+            File.Move(source, target);
+        }
+
+        File.Move(_logPath, ArchivePath(1));
+    }
+
     private static void Write(string level, string message)
     {
         try
@@ -35,11 +59,7 @@ public static class Logger
             {
                 Directory.CreateDirectory(_dir);
 
-                var fi = new FileInfo(_logPath);
-                if (fi.Exists && fi.Length > 1_000_000)
-                {
-                    File.Delete(_logPath);
-                }
+                RotateIfNeeded();
 
                 File.AppendAllText(_logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}");
             }

@@ -60,41 +60,4 @@ public class FileTypeDetector
 
         return FileCategory.Unknown;
     }
-
-    public static bool IsSupported(string filePath)
-    {
-        var category = Detect(filePath);
-        return category != FileCategory.Unknown;
-    }
-
-    public static bool IsTextFile(string filePath) => Detect(filePath) == FileCategory.Text;
-
-    public static int GetMaxTextSize() => 2 * 1024 * 1024;
-
-    public static bool ShouldReadAsText(string filePath)
-    {
-        var category = Detect(filePath);
-        if (category == FileCategory.Text) return true;
-
-        try
-        {
-            var fi = new FileInfo(filePath);
-            if (fi.Length > GetMaxTextSize()) return false;
-
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var buffer = new byte[512];
-            var read = stream.Read(buffer, 0, buffer.Length);
-
-            for (int i = 0; i < read; i++)
-            {
-                if (buffer[i] == 0) return false;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
 }

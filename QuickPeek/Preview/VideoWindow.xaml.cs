@@ -21,6 +21,10 @@ public partial class VideoWindow : Window
     private readonly DispatcherTimer _statusTimer;
     private AppConfig _config = AppConfig.Default;
     private IntPtr _handle;
+
+    /// <summary>窗口句柄，供外部判断光标是否落在预览窗口内。</summary>
+    public IntPtr Handle => _handle;
+
     private int _videoWidth;
     private int _videoHeight;
     private string _playbackInfo = string.Empty;

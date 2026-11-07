@@ -59,6 +59,7 @@ public static class HotkeyText
         if (PreviewManager.IsCtrlKeyPressed()) mods |= ModifierKeys.Control;
         if (PreviewManager.IsShiftKeyPressed()) mods |= ModifierKeys.Shift;
         if (PreviewManager.IsAltKeyPressed()) mods |= ModifierKeys.Alt;
+        if (PreviewManager.IsWinKeyPressed()) mods |= ModifierKeys.Windows;
 
         return new KeyCombo(mods, key);
     }

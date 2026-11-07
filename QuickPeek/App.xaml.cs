@@ -13,12 +13,11 @@ public partial class App : Application
     private PreviewManager? _previewManager;
     private TaskbarIcon? _trayIcon;
     private System.Threading.Mutex? _singleInstanceMutex;
+    private bool _ownsMutex;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-
-        Logger.Verbose = true;
 
         // 单实例：多个进程会各自安装全局钩子，导致明显卡顿
         _singleInstanceMutex = new System.Threading.Mutex(true, "QuickPeek.SingleInstance.v1", out bool isFirstInstance);
@@ -28,6 +27,8 @@ public partial class App : Application
             Shutdown();
             return;
         }
+
+        _ownsMutex = true;
 
         // 任何未捕获异常都记录到日志并阻止进程直接崩溃
         DispatcherUnhandledException += (s, args) =>
@@ -94,7 +95,7 @@ public partial class App : Application
         try
         {
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            var iconStream = assembly.GetManifestResourceStream("QuickPeek.Resources.icon.ico");
+            using var iconStream = assembly.GetManifestResourceStream("QuickPeek.Resources.icon.ico");
             if (iconStream != null)
             {
                 return new System.Drawing.Icon(iconStream);
@@ -159,7 +160,10 @@ public partial class App : Application
     {
         _trayIcon?.Dispose();
         _previewManager?.Dispose();
-        _singleInstanceMutex?.ReleaseMutex();
+        if (_ownsMutex)
+        {
+            try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
+        }
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }

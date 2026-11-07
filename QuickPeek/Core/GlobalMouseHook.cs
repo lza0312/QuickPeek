@@ -229,12 +229,6 @@ public class GlobalMouseHook : IDisposable
         return args.Handled;
     }
 
-    public POINT GetCurrentMousePos()
-    {
-        PInvoke.GetCursorPos(out var pt);
-        return pt;
-    }
-
     public void Dispose()
     {
         if (_isDisposed) return;
