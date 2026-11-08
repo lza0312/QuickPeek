@@ -23,9 +23,6 @@ public partial class VideoWindow : Window
     private AppConfig _config = AppConfig.Default;
     private IntPtr _handle;
 
-    /// <summary>窗口句柄，供外部判断光标是否落在预览窗口内。</summary>
-    public IntPtr Handle => _handle;
-
     private int _videoWidth;
     private int _videoHeight;
     private string _playbackInfo = string.Empty;
@@ -91,10 +88,20 @@ public partial class VideoWindow : Window
         _videoHeight = videoHeight;
         _isAudio = isAudio;
 
-        // 切换新视频前先解绑旧播放器，避免 Host 继续渲染已释放的实例
-        try { Host.Player = null; } catch { }
-
-        Host.Player = previewer.Player;
+        // 播放器全进程复用，宿主只绑定一次。
+        // 反复解绑会触发 FlyleafLib 对旧 Player 的 SwapChain.Dispose，
+        // 而此时渲染线程的 RenderIdleLoop 可能仍在用同一块后台缓冲。
+        if (Host.Player != previewer.Player)
+        {
+            try
+            {
+                Host.Player = previewer.Player;
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug($"绑定渲染宿主失败: {ex.Message}");
+            }
+        }
         FileNameTextBlock.Text = fileName;
         UpdateFileInfo(info);
 
@@ -221,34 +228,15 @@ public partial class VideoWindow : Window
 
     private void PositionWindow()
     {
-        var screen = MonitorHelper.GetCursorWorkArea();
+        var screen = MonitorHelper.GetCursorWorkArea(out var dpiScale);
         var marginX = _config.PreviewMarginXPx;
         var marginY = _config.PreviewMarginYPx;
 
-        double left, top;
-
-        switch (_config.PreviewCorner)
-        {
-            case CornerPosition.BottomRight:
-                left = screen.Right - Width - marginX;
-                top = screen.Bottom - Height - marginY;
-                break;
-            case CornerPosition.BottomLeft:
-                left = screen.Left + marginX;
-                top = screen.Bottom - Height - marginY;
-                break;
-            case CornerPosition.TopRight:
-                left = screen.Right - Width - marginX;
-                top = screen.Top + marginY;
-                break;
-            default:
-                left = screen.Left + marginX;
-                top = screen.Top + marginY;
-                break;
-        }
-
-        Left = Math.Max(screen.Left, left);
-        Top = Math.Max(screen.Top, top);
+        // 四角模式按配置角落固定摆放；「跟随鼠标」模式放在光标的另一侧
+        var rect = MonitorHelper.PlacePreview(
+            screen, Width, Height, _config.PreviewCorner, marginX, marginY, dpiScale);
+        Left = rect.Left;
+        Top = rect.Top;
     }
 
     public void HidePreview()
@@ -259,8 +247,8 @@ public partial class VideoWindow : Window
 
         _hud?.HideHud();
 
-        try { Host.Player = null; } catch { }
-
+        // 不解绑 Host.Player：Player 复用，解绑会让 FlyleafLib 在渲染线程运行期间
+        // 释放 SwapChain；真正释放由 VideoPreviewer.Dispose 负责（内部会先停掉空闲渲染循环）。
         Hide();
     }
 

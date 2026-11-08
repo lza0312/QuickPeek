@@ -10,9 +10,13 @@ namespace QuickPeek.Core;
 public static class Logger
 {
     private static readonly object _lock = new();
-    private static readonly string _dir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuickPeek");
-    private static readonly string _logPath = Path.Combine(_dir, "quickpeek.log");
+    // full 与 lite 各自使用独立目录与日志文件名，便于区分两个版本的运行记录
+    private static readonly string _dir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        AppIdentity.ConfigDirectoryName);
+
+    private static readonly string _logFileName = AppIdentity.Name.ToLowerInvariant() + ".log";
+    private static readonly string _logPath = Path.Combine(_dir, _logFileName);
 
     public static bool Verbose { get; set; }
 
@@ -30,7 +34,8 @@ public static class Logger
     private const long MaxLogBytes = 1_000_000;
     private const int MaxArchivedFiles = 2;
 
-    private static string ArchivePath(int index) => Path.Combine(_dir, $"quickpeek.{index}.log");
+    private static string ArchivePath(int index)
+        => Path.Combine(_dir, $"{AppIdentity.Name.ToLowerInvariant()}.{index}.log");
 
     /// <summary>超过上限时滚动保留 quickpeek.1.log / quickpeek.2.log，避免日志无限增长。</summary>
     private static void RotateIfNeeded()

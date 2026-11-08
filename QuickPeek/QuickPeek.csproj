@@ -13,6 +13,8 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(LiteBuild)' == 'true'">
     <DefineConstants>$(DefineConstants);LITE_BUILD</DefineConstants>
+    <!-- 精简版使用独立程序集名，生成 QuickPeekLite.exe / QuickPeekLite.dll -->
+    <AssemblyName>QuickPeekLite</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FlyleafLib" Version="3.11.13" />

@@ -26,12 +26,14 @@ if (Test-Path $liteFfmpeg) {
     Remove-Item $liteFfmpeg -Recurse -Force
 }
 
+# 压缩包名与程序集名保持一致：完整版 QuickPeek.zip，精简版 QuickPeekLite.zip
+$packageNames = @{ full = "QuickPeek"; lite = "QuickPeekLite" }
 foreach ($flavor in @("full", "lite")) {
     $dir = Join-Path $output $flavor
     Copy-Item (Join-Path $root "LICENSE") $dir -Force
     Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $dir -Force
 
-    $zip = Join-Path $output "QuickPeek-$flavor.zip"
+    $zip = Join-Path $output ($packageNames[$flavor] + ".zip")
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $dir "*") -DestinationPath $zip
     Write-Host "已生成 $zip"

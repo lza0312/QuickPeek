@@ -22,7 +22,7 @@
             <DropShadowEffect Color="Black" BlurRadius="16" ShadowDepth="0" Opacity="0.5" />
         </Border.Effect>
         <StackPanel>
-            <TextBlock Text="QuickPeek" Foreground="{DynamicResource QP.SubText}" FontSize="12" />
+            <TextBlock x:Name="BrandTextBlock" Text="QuickPeek" Foreground="{DynamicResource QP.SubText}" FontSize="12" />
             <TextBlock x:Name="MessageText"
                        Foreground="{DynamicResource QP.Text}"
                        FontSize="14"

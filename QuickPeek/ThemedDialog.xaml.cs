@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using QuickPeek.Core;
 
 namespace QuickPeek;
 
@@ -11,6 +12,10 @@ public partial class ThemedDialog : Window
     private ThemedDialog(string message, bool confirm)
     {
         InitializeComponent();
+
+        // 标题随版本身份变化（精简版显示 QuickPeekLite）
+        Title = AppIdentity.Name;
+        BrandTextBlock.Text = AppIdentity.Name;
 
         MessageText.Text = message;
         CancelButton.Visibility = confirm ? Visibility.Visible : Visibility.Collapsed;

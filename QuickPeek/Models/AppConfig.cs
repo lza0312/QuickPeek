@@ -7,7 +7,9 @@ public enum CornerPosition
     BottomRight,
     BottomLeft,
     TopRight,
-    TopLeft
+    TopLeft,
+    /// <summary>跟随鼠标：以光标所在显示器工作区中心点为基准，放在光标的另一侧。</summary>
+    FollowMouse
 }
 
 public enum PreviewSizeMode

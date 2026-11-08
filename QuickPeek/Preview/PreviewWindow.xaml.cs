@@ -20,12 +20,11 @@ public partial class PreviewWindow : Window
     private AppConfig _config = AppConfig.Default;
     private IntPtr _handle;
 
-    /// <summary>窗口句柄，供外部判断光标是否落在预览窗口内。</summary>
-    public IntPtr Handle => _handle;
-
     private readonly System.Windows.Threading.DispatcherTimer _statusTimer;
-    private int _contentWidth;
-    private int _contentHeight;
+
+    /// <summary>内容宽高比（宽 / 高），只由原图尺寸决定，和解码尺寸、缓存命中无关。</summary>
+    private double _contentAspect;
+    private const double MinSide = 24;
 
     private const double HeaderHeight = 44;
 
@@ -97,13 +96,13 @@ public partial class PreviewWindow : Window
 
     public void PositionWindow()
     {
-        var screen = MonitorHelper.GetCursorWorkArea();
+        var screen = MonitorHelper.GetCursorWorkArea(out var dpiScale);
         var marginX = _config.PreviewMarginXPx;
         var marginY = _config.PreviewMarginYPx;
-        var scale = Math.Clamp(_config.PreviewScalePercent, 100, 300) / 100.0;
+        var uiScale = Math.Clamp(_config.PreviewScalePercent, 100, 300) / 100.0;
 
         // 缩放只影响文字 UI（标题栏字号、高度），图片/文本内容仍按配置尺寸显示
-        ApplyTextScale(scale);
+        ApplyTextScale(uiScale);
 
         var maxW = _config.PreviewWidthPx > 0 ? _config.PreviewWidthPx : 1280;
         var maxH = _config.PreviewHeightPx > 0 ? _config.PreviewHeightPx : 720;
@@ -111,22 +110,45 @@ public partial class PreviewWindow : Window
         maxW = Math.Min(maxW, screen.Width - marginX * 2);
         maxH = Math.Min(maxH, screen.Height - marginY * 2);
 
-        var header = (_config.ShowFileInfo ? HeaderHeight : 0) * scale;
+        var header = (_config.ShowFileInfo ? HeaderHeight : 0) * uiScale;
         var contentMaxH = Math.Max(120, maxH - header);
 
         double width;
         double height;
 
-        if (_contentWidth > 0 && _contentHeight > 0)
+        if (_contentAspect > 0)
         {
-            // 与视频浮窗一致：窗口按内容比例铺满可用宽度，不留下背景边
-            var ratio = (double)_contentWidth / _contentHeight;
+            // 只按「原图宽高比 + 配置的上限」推导窗口尺寸：
+            // 先铺满可用宽度，超高时再按高度反算；不读取任何已解码位图的尺寸。
             width = maxW;
-            height = width / ratio;
+            height = width / _contentAspect;
             if (height > contentMaxH)
             {
                 height = contentMaxH;
-                width = height * ratio;
+                width = height * _contentAspect;
+            }
+
+            // 最小可点击尺寸：按比例放大后再受上限约束，
+            // 全程只改一边、另一边由宽高比推导，避免超长条形图被强行拉伸或裁切
+            if (width < MinSide)
+            {
+                width = MinSide;
+                height = width / _contentAspect;
+            }
+            if (height < MinSide)
+            {
+                height = MinSide;
+                width = height * _contentAspect;
+            }
+            if (width > maxW)
+            {
+                width = maxW;
+                height = width / _contentAspect;
+            }
+            if (height > contentMaxH)
+            {
+                height = contentMaxH;
+                width = height * _contentAspect;
             }
         }
         else
@@ -135,31 +157,17 @@ public partial class PreviewWindow : Window
             height = contentMaxH;
         }
 
-        Width = Math.Max(160, width);
-        Height = Math.Max(120, Math.Min(maxH, height + header));
+        Width = width;
+        Height = height + header;
 
-        switch (_config.PreviewCorner)
-        {
-            case CornerPosition.BottomRight:
-                Left = screen.Right - Width - marginX;
-                Top = screen.Bottom - Height - marginY;
-                break;
-            case CornerPosition.BottomLeft:
-                Left = screen.Left + marginX;
-                Top = screen.Bottom - Height - marginY;
-                break;
-            case CornerPosition.TopRight:
-                Left = screen.Right - Width - marginX;
-                Top = screen.Top + marginY;
-                break;
-            case CornerPosition.TopLeft:
-                Left = screen.Left + marginX;
-                Top = screen.Top + marginY;
-                break;
-        }
+        // 四角模式按配置角落固定摆放；「跟随鼠标」模式放在光标的另一侧
+        var rect = MonitorHelper.PlacePreview(
+            screen, Width, Height, _config.PreviewCorner, marginX, marginY, dpiScale);
+        Left = rect.Left;
+        Top = rect.Top;
 
-        Left = Math.Max(screen.Left, Left);
-        Top = Math.Max(screen.Top, Top);
+        // 便于验证「同一张图连续悬停尺寸一致」：同一文件的宽高比与尺寸每次都应相同
+        Logger.Debug($"预览尺寸 aspect={_contentAspect:F4} -> {Width:F0}x{Height:F0}");
     }
 
     /// <summary>只放大标题栏的文字与高度，不改变预览内容尺寸。</summary>
@@ -173,10 +181,14 @@ public partial class PreviewWindow : Window
         CloseGlyphTextBlock.FontSize = 12 * scale;
     }
 
-    public void ShowPreview(string fileName, string? info = null, int contentWidth = 0, int contentHeight = 0)
+    /// <summary>
+    /// 显示预览。窗口尺寸只由 <paramref name="contentAspect"/>（原图宽/高）与配置上限决定，
+    /// 与解码后的位图尺寸、缓存是否命中无关，因此同一张图反复悬停尺寸完全一致。
+    /// </summary>
+    public void ShowPreview(string fileName, string? info = null, double contentAspect = 0)
     {
-        _contentWidth = contentWidth;
-        _contentHeight = contentHeight;
+        // 防止除零/异常值把窗口算成 0 或无穷大
+        _contentAspect = contentAspect is > 0 and < 1000 ? contentAspect : 0;
 
         FileNameTextBlock.Text = fileName;
 

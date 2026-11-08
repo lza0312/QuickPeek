@@ -154,7 +154,8 @@
                         </StackPanel>
 
                         <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,4">
-                            <TextBlock Text="边距" VerticalAlignment="Center" Width="60"/>
+                            <TextBlock Text="边距" VerticalAlignment="Center" Width="60"
+                                       ToolTip="四角模式：预览到屏幕边缘的距离；跟随鼠标模式：预览到光标的距离"/>
                             <TextBlock Text="宽" VerticalAlignment="Center"/>
                             <TextBox x:Name="MarginXTextBox" Width="60" VerticalAlignment="Center" Margin="6,0,0,0"/>
                             <TextBlock Text="px" VerticalAlignment="Center" Margin="6,0,0,0"/>

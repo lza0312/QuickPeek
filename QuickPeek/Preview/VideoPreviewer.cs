@@ -85,7 +85,10 @@ public class VideoPreviewer : IDisposable
         }
     }
 
-    /// <summary>停止当前播放但保留 Player 以便下次复用。调用前应先解绑渲染宿主。</summary>
+    /// <summary>
+    /// 停止当前播放但保留 Player 以便下次复用。
+    /// 不需解绑渲染宿主：宿主全程绑定同一个 Player，避免运行期释放 SwapChain。
+    /// </summary>
     public void Stop()
     {
         var player = _player;

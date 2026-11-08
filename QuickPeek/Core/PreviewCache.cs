@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Windows.Media.Imaging;
 
 namespace QuickPeek.Core;
@@ -41,13 +42,25 @@ public static class PreviewCache
     private static readonly LinkedList<Entry<string>> TextList = new();
     private static long _textBytes;
 
+    private static long _imageHits;
+    private static long _imageMisses;
+
+    /// <summary>图片 LRU 的累计命中/未命中次数，用于日志里核对命中率。</summary>
+    public static (long Hits, long Misses) ImageStats()
+        => (Interlocked.Read(ref _imageHits), Interlocked.Read(ref _imageMisses));
+
     public static ImageEntry? GetImage(string key)
     {
         lock (Lock)
         {
             var node = ImageMap.TryGetValue(key, out var found) ? found : null;
-            if (node == null) return null;
+            if (node == null)
+            {
+                Interlocked.Increment(ref _imageMisses);
+                return null;
+            }
 
+            Interlocked.Increment(ref _imageHits);
             ImageList.Remove(node);
             ImageList.AddFirst(node);
             return node.Value.Value;

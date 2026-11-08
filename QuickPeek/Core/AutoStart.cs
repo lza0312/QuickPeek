@@ -10,7 +10,8 @@ namespace QuickPeek.Core;
 public static class AutoStart
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "QuickPeek";
+    // full 与 lite 写入不同的值名，两个版本可各自设置自启动，互不覆盖
+    private static string ValueName => AppIdentity.AutoStartValueName;
 
     public static bool IsEnabled()
     {
@@ -61,7 +62,7 @@ public static class AutoStart
             // 通过 dotnet run 启动时路径是 dotnet.exe，不适合写进注册表
             if (Path.GetFileName(exePath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
             {
-                Logger.Error("自启动失败：当前由 dotnet run 启动，请使用发布后的 QuickPeek.exe");
+                Logger.Error($"自启动失败：当前由 dotnet run 启动，请使用发布后的 {AppIdentity.Name}.exe");
                 return false;
             }
 
@@ -73,7 +74,7 @@ public static class AutoStart
             }
 
             var directory = Path.GetDirectoryName(exePath);
-            if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, "QuickPeek.dll")))
+            if (string.IsNullOrEmpty(directory) || !File.Exists(Path.Combine(directory, AppIdentity.Name + ".dll")))
             {
                 Logger.Error($"自启动失败：{exePath} 不是完整的发布目录，请先执行发布");
                 return false;
@@ -96,5 +97,45 @@ public static class AutoStart
         if (value.Length >= 2 && value.StartsWith('"') && value.EndsWith('"'))
             value = value.Substring(1, value.Length - 2);
         return value;
+    }
+
+    /// <summary>
+    /// 旧版精简版（程序名也叫 QuickPeek）改名为 QuickPeekLite 后，自启动记录仍指向旧 exe。
+    /// 仅当旧记录指向当前程序目录时才迁移到新值名，避免误改真正的完整版记录。
+    /// </summary>
+    public static void MigrateLegacyRegistration()
+    {
+        if (string.IsNullOrEmpty(AppIdentity.LegacyAutoStartValueName)) return;
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
+            if (key == null) return;
+
+            var legacy = key.GetValue(AppIdentity.LegacyAutoStartValueName) as string;
+            if (string.IsNullOrEmpty(legacy)) return;
+
+            var currentExe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(currentExe)) return;
+
+            var currentDir = Path.GetDirectoryName(currentExe);
+            var legacyDir = Path.GetDirectoryName(TrimQuotes(legacy));
+            if (string.IsNullOrEmpty(currentDir) || string.IsNullOrEmpty(legacyDir)) return;
+
+            // 只有旧记录就位于当前安装目录，才说明它属于本版本
+            if (!string.Equals(
+                    Path.GetFullPath(currentDir).TrimEnd('\\'),
+                    Path.GetFullPath(legacyDir).TrimEnd('\\'),
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+
+            key.SetValue(AppIdentity.AutoStartValueName, $"\"{currentExe}\"");
+            key.DeleteValue(AppIdentity.LegacyAutoStartValueName, throwOnMissingValue: false);
+            Logger.Info($"旧版自启动记录已迁移为 {AppIdentity.AutoStartValueName}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug($"迁移旧自启动记录失败: {ex.Message}");
+        }
     }
 }

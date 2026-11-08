@@ -15,6 +15,100 @@
         <SolidColorBrush x:Key="QP.Thumb" Color="#5A5A60" />
         <SolidColorBrush x:Key="QP.ThumbHover" Color="#7A7A82" />
 
+        <!-- 托盘右键菜单配色：不继承系统默认色，运行时按深/浅色模式整组替换。
+             两套都是深底白字，任何 Windows 主题下都不会出现白底白字 -->
+        <SolidColorBrush x:Key="QP.MenuBg" Color="#121212" />
+        <SolidColorBrush x:Key="QP.MenuFg" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="QP.MenuBorder" Color="#3F3F46" />
+        <SolidColorBrush x:Key="QP.MenuHoverBg" Color="#0078D4" />
+        <SolidColorBrush x:Key="QP.MenuHoverFg" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="QP.MenuDisabledFg" Color="#7A7A7A" />
+        <SolidColorBrush x:Key="QP.MenuSeparator" Color="#3F3F46" />
+
+        <!-- 菜单外框：显式背景/边框，避免落到系统浅色默认值 -->
+        <Style x:Key="QP.ContextMenu" TargetType="ContextMenu">
+            <Setter Property="Background" Value="{DynamicResource QP.MenuBg}" />
+            <Setter Property="Foreground" Value="{DynamicResource QP.MenuFg}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource QP.MenuBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <StackPanel IsItemsHost="True"
+                                        KeyboardNavigation.DirectionalNavigation="Cycle"
+                                        SnapsToDevicePixels="True" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 菜单项：自定义模板，明确控制文字、悬停高亮、勾选与禁用态 -->
+        <Style x:Key="QP.MenuItem" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{DynamicResource QP.MenuFg}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="CheckGlyph" Text="✓" FontSize="12"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource QP.MenuFg}"
+                                           Visibility="Collapsed" />
+                                <ContentPresenter Grid.Column="1"
+                                                  ContentSource="Header"
+                                                  RecognizesAccessKey="True"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource QP.MenuHoverBg}" />
+                                <Setter Property="Foreground" Value="{DynamicResource QP.MenuHoverFg}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{DynamicResource QP.MenuDisabledFg}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 分隔线：用显式颜色，不依赖系统默认 -->
+        <Style x:Key="QP.MenuSeparatorStyle" TargetType="Separator">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1" Margin="8,4"
+                                Background="{DynamicResource QP.MenuSeparator}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 统一按钮：圆角 + 悬停/按下反馈 -->
         <Style x:Key="QP.Button" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource QP.Accent}" />

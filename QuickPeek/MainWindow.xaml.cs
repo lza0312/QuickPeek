@@ -16,6 +16,11 @@ public partial class MainWindow : Window
     public MainWindow(PreviewManager previewManager)
     {
         InitializeComponent();
+
+        // 窗口标题随版本身份变化（精简版显示 QuickPeekLite）
+        Title = $"{AppIdentity.Name} 设置";
+        TitleTextBlock.Text = AppIdentity.Name;
+
         _previewManager = previewManager;
         _config = _previewManager.GetConfig();
         _isDarkTheme = _config.UseDarkTheme;
@@ -48,6 +53,7 @@ public partial class MainWindow : Window
         CornerComboBox.Items.Add("左下角");
         CornerComboBox.Items.Add("右上角");
         CornerComboBox.Items.Add("左上角");
+        CornerComboBox.Items.Add("跟随鼠标");
         CornerComboBox.SelectedIndex = (int)_config.PreviewCorner;
 
         WidthTextBox.Text = _config.PreviewWidthPx.ToString();
@@ -237,6 +243,9 @@ public partial class MainWindow : Window
 
         // 滚动条、滑块、提示框等共用同一套调色板，统一深/浅色外观
         ApplySharedPalette(bgColor, groupBg, borderColor, fgColor, accentColor);
+
+        // 托盘右键菜单也跟随深色模式，切换后立即生效
+        App.ApplyMenuPalette(_isDarkTheme);
     }
 
     private void ApplySharedPalette(Color bg, Color panel, Color border, Color fg, Color accent)
