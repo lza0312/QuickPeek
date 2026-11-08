@@ -11,6 +11,16 @@ namespace QuickPeek;
 
 public partial class App : Application
 {
+    /// <summary>
+    /// 程序图标 / 窗口图标 / 托盘图标共用的内嵌资源。
+    /// full 与 lite 图形完全一致，只换配色，避免被当成两个不相关的软件。
+    /// </summary>
+#if LITE_BUILD
+    private const string IconResourceName = "QuickPeek.Resources.icon-lite.ico";
+#else
+    private const string IconResourceName = "QuickPeek.Resources.icon.ico";
+#endif
+
     private PreviewManager? _previewManager;
     private TaskbarIcon? _trayIcon;
     private System.Threading.Mutex? _singleInstanceMutex;
@@ -110,7 +120,7 @@ public partial class App : Application
         try
         {
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            using var iconStream = assembly.GetManifestResourceStream("QuickPeek.Resources.icon.ico");
+            using var iconStream = assembly.GetManifestResourceStream(IconResourceName);
             if (iconStream != null)
             {
                 return new System.Drawing.Icon(iconStream);
@@ -120,6 +130,41 @@ public partial class App : Application
         {
         }
         return System.Drawing.SystemIcons.Information;
+    }
+
+    /// <summary>
+    /// 用同一个 ico 给 WPF 窗口设置图标（标题栏与任务栏跟随）。
+    /// 取最接近 32px 的帧，DPI 缩放时始终保持整数倍清晰度。
+    /// </summary>
+    internal static System.Windows.Media.ImageSource? LoadWindowIcon()
+    {
+        try
+        {
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            using var iconStream = assembly.GetManifestResourceStream(IconResourceName);
+            if (iconStream == null) return null;
+
+            var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(
+                iconStream,
+                System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+
+            System.Windows.Media.Imaging.BitmapFrame best = decoder.Frames[0];
+            foreach (var frame in decoder.Frames)
+            {
+                if (Math.Abs(frame.PixelWidth - 32) < Math.Abs(best.PixelWidth - 32))
+                {
+                    best = frame;
+                }
+            }
+
+            best.Freeze();
+            return best;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private System.Windows.Controls.ContextMenu BuildContextMenu()
@@ -200,6 +245,7 @@ public partial class App : Application
         if (_mainWindow == null)
         {
             _mainWindow = new MainWindow(_previewManager!);
+            _mainWindow.Icon = LoadWindowIcon();
             _mainWindow.Closed += (s, e) => _mainWindow = null;
         }
 

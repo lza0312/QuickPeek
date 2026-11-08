@@ -6,7 +6,8 @@
     <RootNamespace>QuickPeek</RootNamespace>
     <AssemblyName>QuickPeek</AssemblyName>
     <Nullable>enable</Nullable>
-    <ApplicationIcon />
+    <ApplicationIcon Condition="'$(LiteBuild)' != 'true'">Resources\icon.ico</ApplicationIcon>
+    <ApplicationIcon Condition="'$(LiteBuild)' == 'true'">Resources\icon-lite.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 精简版：-p:LiteBuild=true，不打包 FFmpeg，仅图片/文本预览 -->
     <LiteBuild Condition="'$(LiteBuild)' == ''">false</LiteBuild>
@@ -21,6 +22,11 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 同一个 ico 既作为 exe 图标（ApplicationIcon），也以独立清单资源内嵌供托盘/窗口运行时读取 -->
+    <EmbeddedResource Include="Resources\icon.ico" />
+    <EmbeddedResource Include="Resources\icon-lite.ico" />
   </ItemGroup>
   <ItemGroup Condition="'$(LiteBuild)' != 'true'">
     <!-- FlyleafLib 依赖的 FFmpeg 原生库，需随程序一起输出与发布 -->

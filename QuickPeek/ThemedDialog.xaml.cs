@@ -15,6 +15,7 @@ public partial class ThemedDialog : Window
 
         // 标题随版本身份变化（精简版显示 QuickPeekLite）
         Title = AppIdentity.Name;
+        Icon = App.LoadWindowIcon();
         BrandTextBlock.Text = AppIdentity.Name;
 
         MessageText.Text = message;
