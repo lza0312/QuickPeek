@@ -14,3 +14,10 @@ QuickPeek/ffmpeg/**/*.dll
 # 发布产物
 publish/
 *.zip
+
+# Trae 工作目录（非项目内容）
+/Cache/
+/Output/
+/Artifacts/
+/_backup/
+GPUCache/
